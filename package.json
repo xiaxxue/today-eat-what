@@ -1,0 +1,10 @@
+{
+  "name": "what-to-eat-h5-db",
+  "private": true,
+  "version": "1.0.0",
+  "description": "今天吃什么 H5 with SQLite backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
