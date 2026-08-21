@@ -2,9 +2,10 @@
   "name": "what-to-eat-h5-db",
   "private": true,
   "version": "1.0.0",
-  "description": "今天吃什么 H5 with SQLite backend",
+  "description": "今天吃什么 H5：本地 SQLite / Cloudflare Pages Functions + Supabase",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "node build-static.js"
   }
 }
