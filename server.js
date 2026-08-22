@@ -498,6 +498,18 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (url.pathname === '/app.js') {
+    const filePath = path.join(__dirname, 'app.js');
+    const content = await readFile(filePath);
+    res.writeHead(200, {
+      'Content-Type': 'text/javascript; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(content);
+    return;
+  }
+
   writeText(res, 404, 'Not Found');
 }
 
