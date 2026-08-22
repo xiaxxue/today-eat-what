@@ -401,3 +401,86 @@ test('a group owner cannot leave without deleting or transferring the group', as
   assert.equal(response.status, 400);
   assert.deepEqual(await body(response), { ok: false, msg: '群主不能退出，请删除群组或转让群主' });
 });
+
+test('rating updates return one-food aggregates without reloading unrelated group data', async () => {
+  const requests = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const target = String(url);
+    requests.push({ target, method: init.method || 'GET' });
+    if (target === 'https://demo.supabase.co/auth/v1/user') {
+      return Response.json({ id: 'user-a', email: 'alice@example.com', user_metadata: {} });
+    }
+    if (target.includes('/rest/v1/groups?')) {
+      return Response.json([{ id: 2, name: 'Lunch', code: 'LUNCH2', owner_id: 'user-a', is_personal: false }]);
+    }
+    if (target.includes('/rest/v1/group_members?')) {
+      return Response.json([{ id: 9, group_id: 2, user_id: 'user-a', name: 'Alice', role: 'owner' }]);
+    }
+    if (target.includes('/rest/v1/foods?')) {
+      return Response.json([{ id: 7, imported_confirmed_count: 0 }]);
+    }
+    if (target.includes('/rest/v1/food_ratings?') && init.method === 'POST') {
+      const ratingBody = JSON.parse(init.body);
+      assert.deepEqual(
+        { food_id: ratingBody.food_id, member_id: ratingBody.member_id, score: ratingBody.score },
+        { food_id: 7, member_id: 9, score: 5 },
+      );
+      assert.match(ratingBody.updated_at, /^\d{4}-\d{2}-\d{2}T/);
+      return Response.json([{ food_id: 7, member_id: 9, score: 5 }]);
+    }
+    if (target.includes('/rest/v1/food_ratings?')) {
+      return Response.json([{ member_id: 9, score: 5 }, { member_id: 10, score: 3 }]);
+    }
+    throw new Error(`unexpected request: ${target}`);
+  };
+
+  const response = await onRequest({
+    request: request('/api/foods/7/rating?groupId=2', {
+      method: 'POST', headers: { Cookie: 'wte_access_token=user-a-token' }, body: JSON.stringify({ score: 5 }),
+    }),
+    env,
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await body(response), {
+    ok: true,
+    food: { id: 7, rating: 4, rating_count: 2, my_rating: 5 },
+  });
+  assert.equal(requests.some(({ target }) => target.includes('/food_visits') || target.includes('/meal_picks')), false);
+});
+
+test('recording a visit does not reload ratings, visits, or picks', async () => {
+  const requests = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const target = String(url);
+    requests.push({ target, method: init.method || 'GET' });
+    if (target === 'https://demo.supabase.co/auth/v1/user') {
+      return Response.json({ id: 'user-a', email: 'alice@example.com', user_metadata: {} });
+    }
+    if (target.includes('/rest/v1/groups?')) {
+      return Response.json([{ id: 2, name: 'Lunch', code: 'LUNCH2', owner_id: 'user-a', is_personal: false }]);
+    }
+    if (target.includes('/rest/v1/group_members?')) {
+      return Response.json([{ id: 9, group_id: 2, user_id: 'user-a', name: 'Alice', role: 'owner' }]);
+    }
+    if (target.includes('/rest/v1/foods?')) return Response.json([{ id: 7 }]);
+    if (target.endsWith('/rest/v1/food_visits') && init.method === 'POST') {
+      assert.deepEqual(JSON.parse(init.body), { food_id: 7, member_id: 9 });
+      return Response.json([{ id: 12, food_id: 7, member_id: 9 }]);
+    }
+    throw new Error(`unexpected request: ${target}`);
+  };
+
+  const response = await onRequest({
+    request: request('/api/foods/7/visits?groupId=2', {
+      method: 'POST', headers: { Cookie: 'wte_access_token=user-a-token' }, body: '{}',
+    }),
+    env,
+  });
+
+  assert.equal(response.status, 201);
+  assert.deepEqual(await body(response), { ok: true, food: { id: 7 } });
+  const foodVisitCalls = requests.filter(({ target }) => target.includes('/rest/v1/food_visits'));
+  assert.deepEqual(foodVisitCalls.map(({ method }) => method), ['POST']);
+  assert.equal(requests.some(({ target }) => target.includes('/food_ratings') || target.includes('/meal_picks')), false);
+});
