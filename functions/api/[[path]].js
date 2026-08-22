@@ -1,6 +1,6 @@
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+  'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
@@ -85,6 +85,13 @@ function createSupabase(env) {
         method: 'POST',
         headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
         body: JSON.stringify(rows),
+      });
+    },
+    update(table, params = {}, values = {}) {
+      return request(`/${table}${queryString(params)}`, {
+        method: 'PATCH',
+        headers: { Prefer: 'return=representation' },
+        body: JSON.stringify(values),
       });
     },
     remove(table, params = {}) {
@@ -549,6 +556,22 @@ async function handleApi(request, env) {
   }
 
   const groupRoute = pathname.match(/^\/api\/groups\/(\d+)$/);
+  if (groupRoute && method === 'PATCH') {
+    const body = await readBody(request);
+    const name = typeof body?.name === 'string' ? body.name.trim() : '';
+    if (!name) throw new ApiError(400, '群名不能为空');
+    if (name.length > 50) throw new ApiError(400, '群名不能超过 50 个字');
+    const group = await getGroupById(db, groupRoute[1]);
+    await requireGroupAccess(db, group, user);
+    if (group.owner_id !== user.id) throw new ApiError(403, '只有群主可以修改群名');
+    const updated = await db.update('groups', {
+      id: `eq.${group.id}`,
+      owner_id: `eq.${user.id}`,
+    }, { name });
+    if (!updated?.length) throw new ApiError(409, '群组状态已变化，请刷新后重试');
+    return json({ ok: true, group: await groupWithCount(db, updated[0], user.id) });
+  }
+
   if (groupRoute && method === 'DELETE') {
     const group = await getGroupById(db, groupRoute[1]);
     await requireGroupAccess(db, group, user);
@@ -561,6 +584,21 @@ async function handleApi(request, env) {
     });
     if (!removed?.length) throw new ApiError(409, '群组状态已变化，请刷新后重试');
     return json({ ok: true, removed: group.id });
+  }
+
+  const groupMembership = pathname.match(/^\/api\/groups\/(\d+)\/membership$/);
+  if (groupMembership && method === 'DELETE') {
+    const group = await getGroupById(db, groupMembership[1]);
+    const member = await requireGroupAccess(db, group, user);
+    if (group.is_personal) throw new ApiError(400, '系统个人群不能退出');
+    if (group.owner_id === user.id || member.role === 'owner') throw new ApiError(400, '群主不能退出，请删除群组或转让群主');
+    const removed = await db.remove('group_members', {
+      id: `eq.${member.id}`,
+      group_id: `eq.${group.id}`,
+      user_id: `eq.${user.id}`,
+    });
+    if (!removed?.length) throw new ApiError(409, '成员状态已变化，请刷新后重试');
+    return json({ ok: true, removed: member.id });
   }
 
   const groupMembers = pathname.match(/^\/api\/groups\/(\d+)\/members$/);

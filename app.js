@@ -13,6 +13,9 @@ let currentGroupId = null;
 let currentUser = null;
 let authMode = 'login';
 let isPicking = false;
+let groupMenuId = null;
+let groupMenuPlacement = null;
+let renameGroupId = null;
 
 const memberToken = localStorage.getItem(MEMBER_TOKEN_KEY)
   || (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `member-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -27,7 +30,7 @@ const els = {
   accountBtn: $('accountBtn'), accountBackdrop: $('accountBackdrop'), accountName: $('accountName'), accountEmail: $('accountEmail'),
   accountStatus: $('accountStatus'), groupOpenBtn: $('groupOpenBtn'), groupBackdrop: $('groupBackdrop'), groupList: $('groupList'),
   groupStatus: $('groupStatus'), currentGroupTitle: $('currentGroupTitle'), currentGroupCode: $('currentGroupCode'),
-  currentMemberCount: $('currentMemberCount'), inviteText: $('inviteText'), memberSummary: $('memberSummary'),
+  currentMemberCount: $('currentMemberCount'), memberSummary: $('memberSummary'), currentGroupMenu: $('currentGroupMenu'),
   memberList: $('memberList'), result: $('result'), dice: $('dice'), countTip: $('countTip'), listWrap: $('listWrap'),
   listLen: $('listLen'), importStatus: $('importStatus'), search: $('searchInput'), category: $('categorySelect'),
   rankList: $('rankList'), mealTotal: $('mealTotal'), pickTotal: $('pickTotal'), historyList: $('historyList'),
@@ -249,8 +252,8 @@ function renderMembers() {
   els.memberList.innerHTML = members.map((member, index) => {
     const name = member.name || `群成员 ${index + 1}`;
     const role = member.role === 'owner' ? ' · 群主' : '';
-    return `<span class="member-chip">${esc(name)}${role} · ${Number(member.rating_count) || 0}次评分 / ${Number(member.visit_count) || 0}次到访</span>`;
-  }).join('') || '<span class="member-chip">还没有群成员</span>';
+    return `<div class="member-row"><span>${esc(name)}${role}</span><small>${Number(member.rating_count) || 0} 次评分 · ${Number(member.visit_count) || 0} 次到访</small></div>`;
+  }).join('') || '<div class="member-row"><span>还没有群成员</span></div>';
 }
 
 function updateInviteCard(group) {
@@ -258,14 +261,16 @@ function updateInviteCard(group) {
   els.currentGroupTitle.textContent = group.name;
   els.currentGroupCode.textContent = group.code;
   els.currentMemberCount.textContent = `${Number(group.member_count) || members.length} 位成员`;
-  const linkBase = IS_LOCAL ? 'http://localhost:3000' : location.origin;
-  els.inviteText.textContent = `邀请加入「${group.name}」：打开 ${linkBase}/?groupCode=${encodeURIComponent(group.code)}，登录后即可加入。`;
+  $('currentGroupMenuBtn').hidden = !groupMenuAvailable(group);
+  renderCurrentGroupMenu();
 }
 
 async function setGroup(id, announce = true) {
   const target = groups.find((group) => group.id === Number(id));
   if (!target) return;
   currentGroupId = target.id;
+  groupMenuId = null;
+  groupMenuPlacement = null;
   localStorage.setItem(GROUP_KEY, String(currentGroupId));
   els.groupOpenBtn.textContent = `${target.name} · ${target.code}`;
   $('foodGroupTip').textContent = target.name;
@@ -282,13 +287,61 @@ async function setGroup(id, announce = true) {
 }
 
 function renderGroupList() {
-  els.groupList.innerHTML = groups.map((group) => `<div class="group-option ${group.id === currentGroupId ? 'current' : ''}"><button class="group-switch" data-group-id="${group.id}"><span><strong>${esc(group.name)}</strong><small>群码：${esc(group.code)} · ${Number(group.member_count) || 0} 位成员${group.is_owner ? ' · 我创建的' : ''}</small></span>${group.id === currentGroupId ? '<span class="check">✓</span>' : ''}</button>${group.is_owner && !group.is_personal ? `<button class="group-delete" data-delete-group="${group.id}" aria-label="删除${esc(group.name)}">删除</button>` : ''}</div>`).join('') || '<div class="empty">还没有群组</div>';
+  els.groupList.innerHTML = groups.map((group) => {
+    const type = group.is_personal ? '个人群' : `${Number(group.member_count) || 0} 位成员`;
+    const menu = groupMenuPlacement === 'list' && groupMenuId === group.id ? groupActionMenu(group) : '';
+    const menuButton = groupMenuAvailable(group) ? `<button class="group-menu-trigger list-menu" data-group-menu="${group.id}" aria-label="${esc(group.name)}的操作">···</button>` : '';
+    return `<div class="group-option ${group.id === currentGroupId ? 'current' : ''}"><button class="group-switch" data-group-id="${group.id}"><span class="group-symbol">群</span><span class="group-copy"><strong>${esc(group.name)}</strong><small>${esc(group.code)} · ${type}</small></span>${group.id === currentGroupId ? '<span class="check">✓</span>' : ''}</button>${menuButton}${menu}</div>`;
+  }).join('') || '<div class="empty">还没有群组</div>';
   els.groupList.querySelectorAll('[data-group-id]').forEach((button) => {
     button.onclick = () => setGroup(Number(button.dataset.groupId));
   });
-  els.groupList.querySelectorAll('[data-delete-group]').forEach((button) => {
-    button.onclick = () => deleteGroup(Number(button.dataset.deleteGroup));
+  els.groupList.querySelectorAll('[data-group-menu]').forEach((button) => {
+    button.onclick = (event) => {
+      event.stopPropagation();
+      toggleGroupMenu(Number(button.dataset.groupMenu), 'list');
+    };
   });
+  bindGroupActions(els.groupList);
+}
+
+function groupMenuAvailable(group) {
+  return !IS_LOCAL && Boolean(group && (group.is_owner || !group.is_personal));
+}
+
+function groupActionMenu(group) {
+  if (!groupMenuAvailable(group)) return '';
+  const rename = group.is_owner ? `<button data-group-action="rename" data-action-group="${group.id}">✎ 修改群名</button>` : '';
+  const remove = group.is_owner && !group.is_personal
+    ? `<button class="danger" data-group-action="delete" data-action-group="${group.id}">⌫ 删除群组</button>`
+    : (!group.is_owner && !group.is_personal ? `<button class="danger" data-group-action="leave" data-action-group="${group.id}">↪ 退出群组</button>` : '');
+  return `<div class="group-action-menu">${rename}${remove}</div>`;
+}
+
+function bindGroupActions(root) {
+  root.querySelectorAll('[data-group-action]').forEach((button) => {
+    button.onclick = (event) => {
+      event.stopPropagation();
+      const id = Number(button.dataset.actionGroup);
+      if (button.dataset.groupAction === 'rename') openRenameGroup(id);
+      if (button.dataset.groupAction === 'delete') deleteGroup(id);
+      if (button.dataset.groupAction === 'leave') leaveGroup(id);
+    };
+  });
+}
+
+function renderCurrentGroupMenu() {
+  const group = currentGroup();
+  els.currentGroupMenu.innerHTML = groupMenuPlacement === 'current' && groupMenuId === group?.id ? groupActionMenu(group) : '';
+  bindGroupActions(els.currentGroupMenu);
+}
+
+function toggleGroupMenu(id, placement) {
+  const sameMenu = groupMenuId === id && groupMenuPlacement === placement;
+  groupMenuId = sameMenu ? null : id;
+  groupMenuPlacement = sameMenu ? null : placement;
+  renderCurrentGroupMenu();
+  renderGroupList();
 }
 
 async function loadFoods() {
@@ -534,6 +587,7 @@ async function createGroup() {
     const data = await api('/api/groups', { method: 'POST', body: JSON.stringify(memberPayload({ name, ...(code ? { code } : {}) })) });
     $('newGroupName').value = '';
     $('newGroupCode').value = '';
+    $('createGroupForm').hidden = true;
     await loadGroups(data.group.id);
     setStatus(els.groupStatus, `已创建「${data.group.name}」，群码：${data.group.code}`, 'ok');
   } catch (error) { setStatus(els.groupStatus, error.message || '创建失败', 'fail'); }
@@ -545,9 +599,62 @@ async function joinGroup() {
   try {
     const data = await api('/api/groups/join-by-code', { method: 'POST', body: JSON.stringify(memberPayload({ groupCode: code })) });
     $('joinCode').value = '';
+    $('joinGroupForm').hidden = true;
     await loadGroups(data.group.id);
     setStatus(els.groupStatus, `已加入「${data.group.name}」`, 'ok');
   } catch (error) { setStatus(els.groupStatus, error.message || '没有找到这个群码，或加入失败', 'fail'); }
+}
+
+function openRenameGroup(id) {
+  const group = groups.find((item) => item.id === Number(id));
+  if (!group?.is_owner) return;
+  renameGroupId = group.id;
+  groupMenuId = null;
+  groupMenuPlacement = null;
+  $('renameGroupInput').value = group.name;
+  setStatus($('renameGroupStatus'), '');
+  $('renameGroupBackdrop').classList.add('open');
+  $('renameGroupInput').focus();
+  renderCurrentGroupMenu();
+  renderGroupList();
+}
+
+function closeRenameGroup() {
+  renameGroupId = null;
+  $('renameGroupBackdrop').classList.remove('open');
+}
+
+async function saveRenameGroup() {
+  const group = groups.find((item) => item.id === Number(renameGroupId));
+  const name = $('renameGroupInput').value.trim();
+  if (!group?.is_owner) { closeRenameGroup(); return; }
+  if (!name) { setStatus($('renameGroupStatus'), '群名不能为空', 'warn'); return; }
+  if (name.length > 50) { setStatus($('renameGroupStatus'), '群名不能超过 50 个字', 'warn'); return; }
+  setStatus($('renameGroupStatus'), '正在保存…');
+  try {
+    const data = await api(`/api/groups/${group.id}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+    closeRenameGroup();
+    await loadGroups(data.group.id);
+    setStatus(els.groupStatus, `已修改为「${data.group.name}」`, 'ok');
+  } catch (error) {
+    setStatus($('renameGroupStatus'), error.message || '修改群名失败', 'fail');
+  }
+}
+
+async function leaveGroup(id) {
+  const group = groups.find((item) => item.id === Number(id));
+  if (!group || group.is_owner || group.is_personal) return;
+  if (!confirm(`确定退出「${group.name}」吗？退出后将无法再查看这个群的餐厅和记录。`)) return;
+  setStatus(els.groupStatus, `正在退出「${group.name}」…`);
+  try {
+    await api(`/api/groups/${group.id}/membership`, { method: 'DELETE' });
+    groupMenuId = null;
+    groupMenuPlacement = null;
+    await loadGroups();
+    setStatus(els.groupStatus, `已退出「${group.name}」`, 'ok');
+  } catch (error) {
+    setStatus(els.groupStatus, error.message || '退出群组失败', 'fail');
+  }
 }
 
 async function deleteGroup(id) {
@@ -569,6 +676,8 @@ function handleInviteCode() {
   if (!inviteCode) return;
   $('joinCode').value = inviteCode;
   els.groupBackdrop.classList.add('open');
+  $('joinGroupForm').hidden = false;
+  $('createGroupForm').hidden = true;
   setStatus(els.groupStatus, '确认群码后点击“加入群”。', 'warn');
 }
 
@@ -586,18 +695,35 @@ $('importBtn').onclick = importFile;
 $('exportBtn').onclick = exportFile;
 els.search.oninput = renderFoods;
 els.category.onchange = renderFoods;
-els.groupOpenBtn.onclick = () => { els.groupBackdrop.classList.add('open'); renderGroupList(); loadMembers(); };
+els.groupOpenBtn.onclick = () => { els.groupBackdrop.classList.add('open'); renderGroupList(); renderCurrentGroupMenu(); loadMembers(); };
 $('closeGroupBtn').onclick = () => els.groupBackdrop.classList.remove('open');
 els.groupBackdrop.onclick = (event) => { if (event.target === els.groupBackdrop) els.groupBackdrop.classList.remove('open'); };
 els.accountBtn.onclick = () => { updateAccountUI(); els.accountBackdrop.classList.add('open'); };
 $('closeAccountBtn').onclick = () => els.accountBackdrop.classList.remove('open');
 els.accountBackdrop.onclick = (event) => { if (event.target === els.accountBackdrop) els.accountBackdrop.classList.remove('open'); };
 $('logoutBtn').onclick = logout;
+$('currentGroupMenuBtn').onclick = () => { const group = currentGroup(); if (group) toggleGroupMenu(group.id, 'current'); };
 $('copyCodeBtn').onclick = copyCode;
-$('copyInviteBtn').onclick = copyInvite;
 $('inviteBtn').onclick = copyInvite;
+$('memberToggleBtn').onclick = () => {
+  const open = els.memberList.hidden;
+  els.memberList.hidden = !open;
+  $('memberToggleBtn').classList.toggle('open', open);
+};
+$('showCreateGroupBtn').onclick = () => {
+  $('createGroupForm').hidden = !$('createGroupForm').hidden;
+  $('joinGroupForm').hidden = true;
+};
+$('showJoinGroupBtn').onclick = () => {
+  $('joinGroupForm').hidden = !$('joinGroupForm').hidden;
+  $('createGroupForm').hidden = true;
+};
 $('createGroupBtn').onclick = createGroup;
 $('joinGroupBtn').onclick = joinGroup;
+$('cancelRenameGroupBtn').onclick = closeRenameGroup;
+$('saveRenameGroupBtn').onclick = saveRenameGroup;
+$('renameGroupBackdrop').onclick = (event) => { if (event.target === $('renameGroupBackdrop')) closeRenameGroup(); };
+$('renameGroupInput').onkeydown = (event) => { if (event.key === 'Enter') saveRenameGroup(); };
 $('clearHistoryBtn').onclick = clearHistory;
 $('helpBtn').onclick = () => alert('登录后，每个账号只会看到自己创建或加入的吃饭群。同群成员共享餐厅、评分和到访数据；抽选历史属于当前账号。');
 

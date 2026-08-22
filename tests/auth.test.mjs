@@ -211,3 +211,116 @@ test('the automatic personal group cannot be deleted', async () => {
   assert.equal(response.status, 400);
   assert.deepEqual(await body(response), { ok: false, msg: '系统个人群不能删除' });
 });
+
+test('an owner can rename their automatic personal group', async () => {
+  let patchCalled = false;
+  globalThis.fetch = async (url, init = {}) => {
+    const target = String(url);
+    if (target === 'https://demo.supabase.co/auth/v1/user') {
+      return Response.json({ id: 'user-a', email: 'alice@example.com', user_metadata: {} });
+    }
+    if (target.includes('/rest/v1/groups?') && init.method !== 'PATCH') {
+      return Response.json([{ id: 1, name: 'My group', code: 'MINE01', owner_id: 'user-a', is_personal: true }]);
+    }
+    if (target.includes('/rest/v1/group_members?')) {
+      return Response.json([{ id: 1, group_id: 1, user_id: 'user-a', name: 'Alice', role: 'owner' }]);
+    }
+    if (target.includes('/rest/v1/groups?') && init.method === 'PATCH') {
+      patchCalled = true;
+      assert.match(target, /owner_id=eq\.user-a/);
+      assert.deepEqual(JSON.parse(init.body), { name: '独享午餐' });
+      return Response.json([{ id: 1, name: '独享午餐', code: 'MINE01', owner_id: 'user-a', is_personal: true }]);
+    }
+    throw new Error(`unexpected request: ${target}`);
+  };
+
+  const response = await onRequest({
+    request: request('/api/groups/1', {
+      method: 'PATCH', headers: { Cookie: 'wte_access_token=user-a-token' }, body: JSON.stringify({ name: '独享午餐' }),
+    }),
+    env,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(patchCalled, true);
+  const payload = await body(response);
+  assert.equal(payload.group.name, '独享午餐');
+  assert.equal(payload.group.is_personal, true);
+});
+
+test('a regular member cannot rename a group', async () => {
+  globalThis.fetch = async (url, init = {}) => {
+    const target = String(url);
+    if (target === 'https://demo.supabase.co/auth/v1/user') {
+      return Response.json({ id: 'user-a', email: 'alice@example.com', user_metadata: {} });
+    }
+    if (target.includes('/rest/v1/groups?') && init.method !== 'PATCH') {
+      return Response.json([{ id: 2, name: 'Bob group', code: 'BOB123', owner_id: 'user-b', is_personal: false }]);
+    }
+    if (target.includes('/rest/v1/group_members?')) {
+      return Response.json([{ id: 9, group_id: 2, user_id: 'user-a', name: 'Alice', role: 'member' }]);
+    }
+    throw new Error(`unexpected request: ${target}`);
+  };
+
+  const response = await onRequest({
+    request: request('/api/groups/2', {
+      method: 'PATCH', headers: { Cookie: 'wte_access_token=user-a-token' }, body: JSON.stringify({ name: 'Not mine' }),
+    }),
+    env,
+  });
+  assert.equal(response.status, 403);
+  assert.deepEqual(await body(response), { ok: false, msg: '只有群主可以修改群名' });
+});
+
+test('a regular member can leave a custom group', async () => {
+  let deleteCalled = false;
+  globalThis.fetch = async (url, init = {}) => {
+    const target = String(url);
+    if (target === 'https://demo.supabase.co/auth/v1/user') {
+      return Response.json({ id: 'user-a', email: 'alice@example.com', user_metadata: {} });
+    }
+    if (target.includes('/rest/v1/groups?')) {
+      return Response.json([{ id: 2, name: 'Bob group', code: 'BOB123', owner_id: 'user-b', is_personal: false }]);
+    }
+    if (target.includes('/rest/v1/group_members?') && init.method !== 'DELETE') {
+      return Response.json([{ id: 9, group_id: 2, user_id: 'user-a', name: 'Alice', role: 'member' }]);
+    }
+    if (target.includes('/rest/v1/group_members?') && init.method === 'DELETE') {
+      deleteCalled = true;
+      assert.match(target, /user_id=eq\.user-a/);
+      return Response.json([{ id: 9 }]);
+    }
+    throw new Error(`unexpected request: ${target}`);
+  };
+
+  const response = await onRequest({
+    request: request('/api/groups/2/membership', { method: 'DELETE', headers: { Cookie: 'wte_access_token=user-a-token' } }),
+    env,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(deleteCalled, true);
+  assert.deepEqual(await body(response), { ok: true, removed: 9 });
+});
+
+test('a group owner cannot leave without deleting or transferring the group', async () => {
+  globalThis.fetch = async (url, init = {}) => {
+    const target = String(url);
+    if (target === 'https://demo.supabase.co/auth/v1/user') {
+      return Response.json({ id: 'user-a', email: 'alice@example.com', user_metadata: {} });
+    }
+    if (target.includes('/rest/v1/groups?')) {
+      return Response.json([{ id: 2, name: 'Lunch', code: 'LUNCH2', owner_id: 'user-a', is_personal: false }]);
+    }
+    if (target.includes('/rest/v1/group_members?') && init.method !== 'DELETE') {
+      return Response.json([{ id: 9, group_id: 2, user_id: 'user-a', name: 'Alice', role: 'owner' }]);
+    }
+    throw new Error(`unexpected request: ${target}`);
+  };
+
+  const response = await onRequest({
+    request: request('/api/groups/2/membership', { method: 'DELETE', headers: { Cookie: 'wte_access_token=user-a-token' } }),
+    env,
+  });
+  assert.equal(response.status, 400);
+  assert.deepEqual(await body(response), { ok: false, msg: '群主不能退出，请删除群组或转让群主' });
+});
