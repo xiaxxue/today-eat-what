@@ -282,9 +282,12 @@ async function setGroup(id, announce = true) {
 }
 
 function renderGroupList() {
-  els.groupList.innerHTML = groups.map((group) => `<button class="group-option ${group.id === currentGroupId ? 'current' : ''}" data-group-id="${group.id}"><span><strong>${esc(group.name)}</strong><small>群码：${esc(group.code)} · ${Number(group.member_count) || 0} 位成员${group.is_owner ? ' · 我创建的' : ''}</small></span>${group.id === currentGroupId ? '<span class="check">✓</span>' : ''}</button>`).join('') || '<div class="empty">还没有群组</div>';
+  els.groupList.innerHTML = groups.map((group) => `<div class="group-option ${group.id === currentGroupId ? 'current' : ''}"><button class="group-switch" data-group-id="${group.id}"><span><strong>${esc(group.name)}</strong><small>群码：${esc(group.code)} · ${Number(group.member_count) || 0} 位成员${group.is_owner ? ' · 我创建的' : ''}</small></span>${group.id === currentGroupId ? '<span class="check">✓</span>' : ''}</button>${group.is_owner && !group.is_personal ? `<button class="group-delete" data-delete-group="${group.id}" aria-label="删除${esc(group.name)}">删除</button>` : ''}</div>`).join('') || '<div class="empty">还没有群组</div>';
   els.groupList.querySelectorAll('[data-group-id]').forEach((button) => {
     button.onclick = () => setGroup(Number(button.dataset.groupId));
+  });
+  els.groupList.querySelectorAll('[data-delete-group]').forEach((button) => {
+    button.onclick = () => deleteGroup(Number(button.dataset.deleteGroup));
   });
 }
 
@@ -545,6 +548,20 @@ async function joinGroup() {
     await loadGroups(data.group.id);
     setStatus(els.groupStatus, `已加入「${data.group.name}」`, 'ok');
   } catch (error) { setStatus(els.groupStatus, error.message || '没有找到这个群码，或加入失败', 'fail'); }
+}
+
+async function deleteGroup(id) {
+  const group = groups.find((item) => item.id === Number(id));
+  if (!group || !group.is_owner || group.is_personal) return;
+  if (!confirm(`确定删除「${group.name}」吗？群内餐厅、评分、到访和历史记录都会一起删除，且无法恢复。`)) return;
+  setStatus(els.groupStatus, `正在删除「${group.name}」…`);
+  try {
+    await api(`/api/groups/${group.id}`, { method: 'DELETE' });
+    await loadGroups();
+    setStatus(els.groupStatus, `已删除「${group.name}」`, 'ok');
+  } catch (error) {
+    setStatus(els.groupStatus, error.message || '删除群组失败', 'fail');
+  }
 }
 
 function handleInviteCode() {

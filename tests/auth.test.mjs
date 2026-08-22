@@ -134,3 +134,80 @@ test('a signed-in user cannot read members of a group they did not join', async 
   assert.equal(response.status, 403);
   assert.deepEqual(await body(response), { ok: false, msg: '你还没有加入这个群' });
 });
+
+test('a group owner can delete a custom group', async () => {
+  let deleteCalled = false;
+  globalThis.fetch = async (url, init = {}) => {
+    const target = String(url);
+    if (target === 'https://demo.supabase.co/auth/v1/user') {
+      return Response.json({ id: 'user-a', email: 'alice@example.com', user_metadata: {} });
+    }
+    if (target.includes('/rest/v1/groups?') && init.method !== 'DELETE') {
+      return Response.json([{ id: 2, name: 'Lunch', code: 'LUNCH2', owner_id: 'user-a', is_personal: false }]);
+    }
+    if (target.includes('/rest/v1/group_members?')) {
+      return Response.json([{ id: 9, group_id: 2, user_id: 'user-a', name: 'Alice', role: 'owner' }]);
+    }
+    if (target.includes('/rest/v1/groups?') && init.method === 'DELETE') {
+      deleteCalled = true;
+      assert.match(target, /owner_id=eq\.user-a/);
+      assert.match(target, /is_personal=eq\.false/);
+      return Response.json([{ id: 2 }]);
+    }
+    throw new Error(`unexpected request: ${target}`);
+  };
+
+  const response = await onRequest({
+    request: request('/api/groups/2', { method: 'DELETE', headers: { Cookie: 'wte_access_token=user-a-token' } }),
+    env,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(deleteCalled, true);
+  assert.deepEqual(await body(response), { ok: true, removed: 2 });
+});
+
+test('a regular member cannot delete a group owned by someone else', async () => {
+  globalThis.fetch = async (url, init = {}) => {
+    const target = String(url);
+    if (target === 'https://demo.supabase.co/auth/v1/user') {
+      return Response.json({ id: 'user-a', email: 'alice@example.com', user_metadata: {} });
+    }
+    if (target.includes('/rest/v1/groups?') && init.method !== 'DELETE') {
+      return Response.json([{ id: 2, name: 'Bob group', code: 'BOB123', owner_id: 'user-b', is_personal: false }]);
+    }
+    if (target.includes('/rest/v1/group_members?')) {
+      return Response.json([{ id: 9, group_id: 2, user_id: 'user-a', name: 'Alice', role: 'member' }]);
+    }
+    throw new Error(`unexpected request: ${target}`);
+  };
+
+  const response = await onRequest({
+    request: request('/api/groups/2', { method: 'DELETE', headers: { Cookie: 'wte_access_token=user-a-token' } }),
+    env,
+  });
+  assert.equal(response.status, 403);
+  assert.deepEqual(await body(response), { ok: false, msg: '只有群主可以删除这个群' });
+});
+
+test('the automatic personal group cannot be deleted', async () => {
+  globalThis.fetch = async (url, init = {}) => {
+    const target = String(url);
+    if (target === 'https://demo.supabase.co/auth/v1/user') {
+      return Response.json({ id: 'user-a', email: 'alice@example.com', user_metadata: {} });
+    }
+    if (target.includes('/rest/v1/groups?') && init.method !== 'DELETE') {
+      return Response.json([{ id: 1, name: 'My group', code: 'MINE01', owner_id: 'user-a', is_personal: true }]);
+    }
+    if (target.includes('/rest/v1/group_members?')) {
+      return Response.json([{ id: 1, group_id: 1, user_id: 'user-a', name: 'Alice', role: 'owner' }]);
+    }
+    throw new Error(`unexpected request: ${target}`);
+  };
+
+  const response = await onRequest({
+    request: request('/api/groups/1', { method: 'DELETE', headers: { Cookie: 'wte_access_token=user-a-token' } }),
+    env,
+  });
+  assert.equal(response.status, 400);
+  assert.deepEqual(await body(response), { ok: false, msg: '系统个人群不能删除' });
+});

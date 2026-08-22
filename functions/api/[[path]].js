@@ -548,6 +548,21 @@ async function handleApi(request, env) {
     return json({ ok: true, group: await groupWithCount(db, group, user.id), member });
   }
 
+  const groupRoute = pathname.match(/^\/api\/groups\/(\d+)$/);
+  if (groupRoute && method === 'DELETE') {
+    const group = await getGroupById(db, groupRoute[1]);
+    await requireGroupAccess(db, group, user);
+    if (group.owner_id !== user.id) throw new ApiError(403, '只有群主可以删除这个群');
+    if (group.is_personal) throw new ApiError(400, '系统个人群不能删除');
+    const removed = await db.remove('groups', {
+      id: `eq.${group.id}`,
+      owner_id: `eq.${user.id}`,
+      is_personal: 'eq.false',
+    });
+    if (!removed?.length) throw new ApiError(409, '群组状态已变化，请刷新后重试');
+    return json({ ok: true, removed: group.id });
+  }
+
   const groupMembers = pathname.match(/^\/api\/groups\/(\d+)\/members$/);
   if (groupMembers && method === 'GET') {
     const group = await getGroupById(db, groupMembers[1]);
