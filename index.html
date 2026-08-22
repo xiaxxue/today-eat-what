@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f3f4f6" />
+  <title>今天去哪吃</title>
+  <style>
+    :root { --orange:#ff8a00; --orange-dark:#ee7200; --ink:#242424; --muted:#8b8b8b; --line:#e7e7e7; --surface:#fff; --page:#f3f4f6; --soft:#f7f7f8; }
+    * { box-sizing:border-box; }
+    html, body { margin:0; min-height:100%; background:#e7e9ec; color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; }
+    body { display:flex; justify-content:center; padding:12px; }
+    button, input, select { font:inherit; }
+    button { cursor:pointer; }
+    .app { width:min(430px,100%); min-height:calc(100vh - 24px); background:var(--page); border-radius:34px 34px 0 0; overflow:hidden; box-shadow:0 8px 30px #00000017; position:relative; display:flex; flex-direction:column; }
+    .topbar { height:68px; flex:none; display:flex; align-items:center; justify-content:space-between; padding:0 18px; background:#fff; border-bottom:1px solid var(--line); }
+    .brand { display:flex; align-items:center; gap:6px; font-weight:800; font-size:20px; letter-spacing:.2px; }
+    .brand span { font-size:20px; }
+    .top-actions { display:flex; gap:9px; }
+    .icon-btn { width:36px; height:36px; border:0; border-radius:50%; background:#f5f6f7; color:#555; font-size:18px; display:grid; place-items:center; }
+    .group-pill { max-width:126px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border:0; border-radius:18px; background:#fff3e6; color:#d76b00; padding:8px 11px; font-size:12px; font-weight:700; }
+    .auth-gate { position:absolute; inset:0; z-index:20; background:linear-gradient(155deg,#fff7eb 0,#f3f4f6 46%,#fff 100%); display:flex; align-items:center; justify-content:center; padding:22px; }
+    .auth-gate.hidden { display:none; }
+    .auth-card { width:100%; background:#fff; border-radius:24px; padding:24px 20px; box-shadow:0 18px 55px #6f4d2226; }
+    .auth-logo { width:58px; height:58px; border-radius:18px; background:#fff0dc; display:grid; place-items:center; font-size:30px; margin-bottom:15px; }
+    .auth-card h1 { margin:0; font-size:25px; }
+    .auth-card > p { color:#888; font-size:13px; line-height:1.6; margin:8px 0 18px; }
+    .auth-tabs { display:grid; grid-template-columns:1fr 1fr; background:#f3f4f5; padding:4px; border-radius:12px; margin-bottom:14px; }
+    .auth-tab { border:0; border-radius:9px; padding:9px; background:transparent; color:#777; font-weight:700; }
+    .auth-tab.active { background:#fff; color:#e37400; box-shadow:0 2px 8px #0000000d; }
+    .auth-form { display:grid; gap:10px; }
+    .auth-form .orange-btn { margin-top:3px; padding:13px; }
+    .auth-note { color:#999; font-size:11px; text-align:center; line-height:1.5; margin-top:12px; }
+    .account-card { background:#fff8ee; border:1px solid #ffd09a; border-radius:17px; padding:15px; margin-bottom:12px; }
+    .account-card strong { display:block; font-size:17px; margin-bottom:5px; }
+    .account-card small { color:#888; word-break:break-all; }
+    .content { flex:1; overflow:auto; padding-bottom:90px; }
+    .view { display:none; padding:18px 16px 0; }
+    .view.active { display:block; }
+    .location-card { background:#fff; border-radius:16px; padding:13px 16px; display:flex; justify-content:space-between; align-items:center; box-shadow:0 4px 12px #00000008; }
+    .location { font-size:13px; color:#424242; }
+    .weather { color:var(--orange-dark); font-weight:800; }
+    .weather small { background:#fff2e5; color:#a6784e; font-weight:600; padding:4px 7px; border-radius:10px; margin-left:6px; }
+    .hero { min-height:220px; margin-top:16px; border-radius:24px; background:#fff; display:flex; flex-direction:column; align-items:center; justify-content:center; box-shadow:0 7px 18px #0000000b; text-align:center; padding:20px; }
+    .dice { width:68px; height:68px; perspective:420px; transform-style:preserve-3d; display:grid; place-items:center; margin-bottom:20px; filter:drop-shadow(0 8px 5px #0002); }
+    .dice-cube { position:relative; width:52px; height:52px; transform-style:preserve-3d; transform:rotateX(-20deg) rotateY(32deg); will-change:transform; }
+    .face { position:absolute; inset:0; display:grid; grid-template-columns:repeat(3,1fr); grid-template-rows:repeat(3,1fr); padding:7px; border:1px solid #c7c7c7; border-radius:9px; background:linear-gradient(145deg,#fff 8%,#ededed 58%,#cecece); box-shadow:inset 2px 2px 5px #fff,inset -2px -2px 5px #aaa5; backface-visibility:hidden; }
+    .face.front { transform:translateZ(26px); }
+    .face.back { transform:rotateY(180deg) translateZ(26px); }
+    .face.right { transform:rotateY(90deg) translateZ(26px); }
+    .face.left { transform:rotateY(-90deg) translateZ(26px); }
+    .face.top { transform:rotateX(90deg) translateZ(26px); }
+    .face.bottom { transform:rotateX(-90deg) translateZ(26px); }
+    .dot { width:8px; height:8px; border-radius:50%; background:#313131; align-self:center; justify-self:center; box-shadow:inset 1px 1px 2px #0009,0 1px 1px #fff; }
+    .front .dot, .top .dot { background:#e83d38; }
+    .p1 { grid-area:1/1; } .p2 { grid-area:1/2; } .p3 { grid-area:1/3; }
+    .p4 { grid-area:2/1; } .p5 { grid-area:2/2; } .p6 { grid-area:2/3; }
+    .p7 { grid-area:3/1; } .p8 { grid-area:3/2; } .p9 { grid-area:3/3; }
+    .result { min-height:29px; font-size:17px; font-weight:750; color:#555; }
+    .result.highlight { color:#f07800; font-size:22px; }
+    .hint { color:#a1a1a1; font-size:14px; }
+    .pick-main { margin-top:16px; width:100%; border:0; border-radius:15px; padding:15px; color:#fff; background:linear-gradient(120deg,#ff9700,#ff7900); font-weight:800; box-shadow:0 7px 13px #ff8a0040; }
+    .pick-main:active { transform:translateY(1px); }
+    .pick-main:disabled, .quick:disabled { opacity:.62; cursor:wait; }
+    .quick-row { display:grid; grid-template-columns:1fr 1.18fr 1fr; gap:10px; margin-top:15px; }
+    .quick { border:1px solid #e4e5e7; border-radius:15px; background:#f8f9fa; color:#555; padding:13px 8px; font-weight:700; font-size:13px; }
+    .quick.primary { color:#fff; background:var(--orange); border-color:var(--orange); box-shadow:0 7px 12px #ff8a0036; }
+    .quick span { display:block; font-size:20px; margin-bottom:5px; }
+    .chat { background:#fff; border-radius:18px; padding:13px 14px; margin-top:15px; color:#777; font-size:13px; }
+    .chat b { color:#555; background:#fff1e2; padding:4px 7px; border-radius:5px; margin-right:3px; }
+    .section-head { display:flex; justify-content:space-between; align-items:center; margin:0 2px 12px; }
+    .section-title { margin:0; font-size:20px; font-weight:850; }
+    .section-sub { color:var(--muted); font-size:12px; }
+    .toolbar { display:grid; grid-template-columns:1fr 108px; gap:9px; margin-bottom:10px; }
+    .input, .select { width:100%; border:1px solid #e0e1e3; border-radius:12px; background:#fff; padding:11px 12px; outline:0; }
+    .input:focus { border-color:#ffad4b; box-shadow:0 0 0 3px #ffad4b22; }
+    .orange-btn { width:100%; border:0; border-radius:12px; background:var(--orange); color:#fff; padding:11px 12px; font-weight:800; }
+    .outline-btn { border:1px solid #e1e2e4; border-radius:10px; background:#fff; color:#555; padding:8px 10px; }
+    .danger-btn { border:1px solid #ffc5c5; border-radius:10px; background:#fff; color:#ee5555; padding:8px 10px; }
+    .restaurant-list { display:grid; gap:12px; margin-top:12px; }
+    .restaurant-card { background:#fff; border-radius:17px; padding:15px 14px 13px; box-shadow:0 5px 15px #00000008; }
+    .restaurant-card .r-top { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
+    .restaurant-name { font-size:16px; font-weight:800; }
+    .r-actions { display:flex; gap:7px; }
+    .meta { color:#969696; font-size:12px; margin-top:7px; }
+    .tag { display:inline-block; margin:8px 5px 0 0; padding:4px 8px; background:#f1f2f3; color:#666; border-radius:9px; font-size:11px; }
+    .featured { background:#fff0dc; color:#db7300; font-weight:750; }
+    .rating-row { margin-top:11px; padding-top:10px; border-top:1px solid #f0f0f0; display:flex; justify-content:space-between; align-items:center; gap:10px; }
+    .stars { display:flex; align-items:center; gap:1px; }
+    .star { border:0; background:transparent; color:#d3d3d3; font-size:21px; line-height:1; padding:2px; }
+    .star.selected { color:#ff9900; text-shadow:0 1px 2px #ff990055; }
+    .rating-copy { color:#858585; font-size:11px; white-space:nowrap; }
+    .visit-btn { border:1px solid #ffd49e; border-radius:10px; background:#fff9f0; color:#d97700; padding:7px 9px; font-size:12px; }
+    .card-foot { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:9px; }
+    .empty { text-align:center; color:#999; padding:50px 0; }
+    .stats-grid { display:grid; gap:14px; }
+    .stat-card { background:#fff; border-radius:18px; padding:17px 16px; box-shadow:0 5px 15px #00000008; }
+    .stat-card h3 { font-size:15px; margin:0 0 12px; padding-bottom:10px; border-bottom:1px solid var(--line); }
+    .rank { display:flex; justify-content:space-between; padding:11px 12px; background:#f5f6f7; border-radius:12px; margin-top:9px; font-size:13px; }
+    .rank b { color:var(--orange-dark); }
+    .big-stat { text-align:center; padding:25px 10px; }
+    .big-stat strong { display:block; font-size:38px; color:var(--orange); line-height:1; margin-bottom:8px; }
+    .big-stat span { color:#999; font-size:13px; }
+    .history-list { display:grid; gap:10px; }
+    .history-item { background:#fff; border-radius:14px; padding:13px 14px; display:flex; justify-content:space-between; align-items:center; }
+    .history-item strong { font-size:15px; }
+    .history-item small { color:#999; }
+    .bottom-nav { position:absolute; bottom:0; left:0; right:0; height:76px; background:#fff; border-top:1px solid var(--line); display:grid; grid-template-columns:repeat(4,1fr); padding:7px 9px max(7px,env(safe-area-inset-bottom)); }
+    .nav-btn { border:0; background:transparent; color:#777; border-radius:16px; font-size:11px; font-weight:650; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; }
+    .nav-btn span { font-size:22px; line-height:1; }
+    .nav-btn.active { color:#fff; background:var(--orange); }
+    .drawer-backdrop { display:none; position:absolute; inset:0; background:#0005; z-index:5; align-items:flex-end; }
+    .drawer-backdrop.open { display:flex; }
+    .drawer { width:100%; max-height:86%; overflow:auto; background:#fff; border-radius:24px 24px 0 0; padding:18px 16px 26px; animation:up .2s ease-out; }
+    @keyframes up { from { transform:translateY(20px); opacity:.4; } to { transform:none; opacity:1; } }
+    .drawer-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+    .drawer-head h2 { margin:0; font-size:19px; }
+    .close { border:0; background:#f3f4f5; border-radius:50%; width:30px; height:30px; color:#666; }
+    .current-group-card { background:linear-gradient(145deg,#fff8ee,#fff); border:1px solid #ffd09a; border-radius:18px; padding:15px; margin-bottom:12px; }
+    .current-group-top { display:flex; justify-content:space-between; align-items:center; color:#d87500; font-size:12px; font-weight:750; }
+    .current-group-card h3 { margin:8px 0 12px; font-size:22px; }
+    .group-code-row { display:flex; align-items:center; gap:8px; color:#777; font-size:13px; }
+    .group-code-row strong { color:#333; font-size:16px; letter-spacing:1px; }
+    .mini-copy { border:0; border-radius:8px; background:#fff; color:#dd7800; padding:5px 8px; font-size:11px; }
+    .invite-card { background:#f7f8f9; border-radius:15px; padding:12px; margin-bottom:12px; }
+    .invite-card h3 { margin:0 0 8px; font-size:14px; }
+    .invite-copy { color:#777; font-size:12px; line-height:1.5; word-break:break-all; margin-bottom:9px; }
+    .invite-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .section-label { display:flex; justify-content:space-between; align-items:center; margin:14px 2px 8px; font-size:14px; font-weight:800; }
+    .section-label small { color:#999; font-weight:500; }
+    .group-list { display:grid; gap:9px; margin-bottom:16px; }
+    .group-option { border:1px solid #e8e8e8; border-radius:14px; background:#fff; display:flex; align-items:stretch; overflow:hidden; }
+    .group-option.current { border-color:#ffb45e; background:#fff8ee; }
+    .group-switch { border:0; background:transparent; padding:12px; min-width:0; flex:1; display:flex; justify-content:space-between; align-items:center; text-align:left; cursor:pointer; }
+    .group-delete { border:0; border-left:1px solid #f1e0e0; background:#fffafa; color:#e65757; padding:0 13px; font-weight:700; cursor:pointer; }
+    .group-delete:hover { background:#fff0f0; }
+    .group-option strong { display:block; font-size:14px; }
+    .group-option small { color:#999; display:block; margin-top:4px; }
+    .member-list { display:flex; flex-wrap:wrap; gap:6px; }
+    .member-chip { padding:5px 8px; border-radius:10px; background:#fff; border:1px solid #e7e7e7; color:#666; font-size:11px; }
+    .member-summary { color:#777; font-size:12px; }
+    .check { color:var(--orange); font-size:18px; }
+    .drawer-form { background:#f7f8f9; border-radius:15px; padding:12px; display:grid; gap:9px; }
+    .drawer-form h3 { margin:0; font-size:14px; }
+    .form-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .form-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .status { min-height:18px; margin:9px 2px 0; font-size:12px; color:#777; }
+    .ok { color:#18885e; } .warn { color:#b46b10; } .fail { color:#d74444; }
+    .import-box { margin-top:12px; padding-top:12px; border-top:1px solid var(--line); display:grid; gap:8px; }
+    .import-box summary { cursor:pointer; color:#666; font-size:13px; }
+    code { background:#f3f4f5; border-radius:5px; padding:2px 4px; }
+    @keyframes diceHop { 0%,100%{transform:translateY(0) scale(1)} 13%{transform:translateY(-16px) scale(1.06)} 27%{transform:translateY(11px) scale(.96)} 42%{transform:translateY(-14px) scale(1.05)} 58%{transform:translateY(10px) scale(.97)} 73%{transform:translateY(-9px) scale(1.03)} 87%{transform:translateY(5px) scale(.99)} }
+    @keyframes cubeRoll { 0%{transform:rotateX(-20deg) rotateY(32deg)} 16%{transform:rotateX(160deg) rotateY(32deg)} 33%{transform:rotateX(340deg) rotateY(32deg)} 50%{transform:rotateX(520deg) rotateY(32deg)} 67%{transform:rotateX(700deg) rotateY(32deg)} 84%{transform:rotateX(880deg) rotateY(32deg)} 100%{transform:rotateX(1060deg) rotateY(32deg)} }
+    .dice.rolling { animation:diceHop 2s ease-in-out; }
+    .dice.rolling .dice-cube { animation:cubeRoll 2s linear; }
+    @media (max-width:450px) { body { padding:0; } .app { min-height:100vh; border-radius:0; } }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <div class="auth-gate" id="authGate"><section class="auth-card"><div class="auth-logo">🍽️</div><h1>今天去哪吃</h1><p>登录后，你的吃饭群、评分和抽选历史会安全地同步到所有设备。</p><div class="auth-tabs"><button class="auth-tab active" id="loginTab" type="button">登录</button><button class="auth-tab" id="signupTab" type="button">注册</button></div><form class="auth-form" id="authForm"><input class="input" id="authName" placeholder="昵称，如：小夏" maxlength="30" style="display:none" /><input class="input" id="authEmail" type="email" autocomplete="email" placeholder="邮箱" required /><input class="input" id="authPassword" type="password" autocomplete="current-password" minlength="8" placeholder="密码（至少 8 位）" required /><button class="orange-btn" id="authSubmit" type="submit">登录</button></form><p class="status" id="authStatus"></p><div class="auth-note">账号由 Supabase Auth 管理，密码不会存储在本页面。</div></section></div>
+    <header class="topbar"><div class="brand"><span>🍽️</span>今天去哪吃</div><div class="top-actions"><button class="group-pill" id="groupOpenBtn" title="切换吃饭群">我的吃饭群</button><button class="icon-btn" id="accountBtn" aria-label="我的账号">👤</button><button class="icon-btn" id="helpBtn" aria-label="使用说明">?</button></div></header>
+    <div class="content">
+      <section class="view active" data-view="pick"><div class="location-card"><span class="location">📍 上海 · 今天</span><span class="weather">☁️ 21°C <small>雷阵雨</small></span></div><div class="hero"><div class="dice" id="dice" aria-label="三维骰子"><div class="dice-cube"><span class="face front"><i class="dot p5"></i></span><span class="face back"><i class="dot p1"></i><i class="dot p3"></i><i class="dot p4"></i><i class="dot p6"></i><i class="dot p7"></i><i class="dot p9"></i></span><span class="face right"><i class="dot p1"></i><i class="dot p5"></i><i class="dot p9"></i></span><span class="face left"><i class="dot p1"></i><i class="dot p3"></i><i class="dot p7"></i><i class="dot p9"></i></span><span class="face top"><i class="dot p1"></i><i class="dot p9"></i></span><span class="face bottom"><i class="dot p1"></i><i class="dot p3"></i><i class="dot p5"></i><i class="dot p7"></i><i class="dot p9"></i></span></div></div><div class="result" id="result">点击“开始吧！”决定今天吃什么</div><div class="hint" id="countTip"></div></div><button class="pick-main" id="pickBtn">开始吧！</button><div class="chat"><b>不想挑</b><span>你也就配吃食堂</span></div><div class="quick-row"><button class="quick" id="rerollBtn"><span>🔄</span>换一个</button><button class="quick primary" id="quickPickBtn"><span>🎲</span>开始吧！</button><button class="quick" id="doneBtn"><span>✅</span>就它了！</button></div></section>
+      <section class="view" data-view="foods"><div class="section-head"><h2 class="section-title">🍴 群组餐厅库 <span id="listLen">(0)</span></h2><span class="section-sub" id="foodGroupTip"></span></div><div class="toolbar"><input class="input" id="searchInput" placeholder="搜索餐厅…" /><select class="select" id="categorySelect"><option value="">全部类型</option></select></div><button class="orange-btn" id="showAddBtn">＋ 添加餐厅</button><div id="addPanel" class="drawer-form" style="display:none;margin:12px 0 0"><h3>新增餐厅 / 菜品</h3><div class="form-row"><input class="input" id="nameInput" placeholder="名称，如：大米先生" /><input class="input" id="catInput" placeholder="类型，如：米饭类" /></div><button class="orange-btn" id="addBtn">保存到当前群</button></div><details class="import-box"><summary>导入 / 导出当前群数据</summary><div class="status">支持 JSON 数组或 CSV（name,category）。导入会覆盖当前群餐厅，并清空旧餐厅的评分与到访记录。</div><input id="fileInput" class="input" type="file" accept=".json,.csv,text/csv,application/json" /><div class="form-actions"><button class="outline-btn" id="importBtn">导入</button><button class="outline-btn" id="exportBtn">导出 JSON</button></div></details><div class="status" id="importStatus"></div><div class="restaurant-list" id="listWrap"></div></section>
+      <section class="view" data-view="stats"><div class="section-head"><h2 class="section-title">📊 群组精选</h2><span class="section-sub" id="statsGroupTip"></span></div><div class="stats-grid"><div class="stat-card"><h3>群友精选餐厅</h3><div id="rankList"></div></div><div class="stat-card big-stat"><strong id="mealTotal">0</strong><span>群组餐厅总数</span></div><div class="stat-card big-stat"><strong id="pickTotal">0</strong><span>群组累计到访</span></div></div></section>
+      <section class="view" data-view="history"><div class="section-head"><h2 class="section-title">📜 我的抽选历史</h2><button class="outline-btn" id="clearHistoryBtn">清空</button></div><div class="history-list" id="historyList"></div></section>
+    </div>
+    <nav class="bottom-nav" aria-label="主导航"><button class="nav-btn active" data-target="pick"><span>🏷️</span>抽选</button><button class="nav-btn" data-target="foods"><span>🍴</span>餐厅</button><button class="nav-btn" data-target="stats"><span>☷</span>统计</button><button class="nav-btn" data-target="history"><span>⏱️</span>历史</button></nav>
+    <div class="drawer-backdrop" id="groupBackdrop"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="groupTitle"><div class="drawer-head"><h2 id="groupTitle">我的吃饭群</h2><button class="close" id="closeGroupBtn">×</button></div><div class="current-group-card"><div class="current-group-top"><span>当前群</span><span id="currentMemberCount">0 位成员</span></div><h3 id="currentGroupTitle">默认吃饭群</h3><div class="group-code-row"><span>群码</span><strong id="currentGroupCode">default</strong><button class="mini-copy" id="copyCodeBtn">复制</button></div></div><div class="invite-card"><h3>本群邀请成员</h3><div class="invite-copy" id="inviteText">打开页面，输入群码加入本群。</div><div class="invite-actions"><button class="outline-btn" id="copyInviteBtn">复制邀请文案</button><button class="orange-btn" id="inviteBtn">邀请成员</button></div></div><div class="section-label"><span>本群成员</span><small id="memberSummary">0 位成员</small></div><div class="member-list" id="memberList"></div><div class="section-label"><span>我的吃饭群</span><small>点击切换</small></div><div class="group-list" id="groupList"></div><div class="drawer-form"><h3>创建新群</h3><div class="form-row"><input class="input" id="newGroupName" placeholder="群名，如：周末吃饭搭子" /><input class="input" id="newGroupCode" placeholder="自定义群码（可选）" /></div><button class="orange-btn" id="createGroupBtn">创建并切换</button></div><div class="drawer-form" style="margin-top:10px"><h3>加入已有群</h3><div class="form-row"><input class="input" id="joinCode" placeholder="输入群码" /><button class="orange-btn" id="joinGroupBtn">加入群</button></div></div><p class="status" id="groupStatus"></p></section></div>
+    <div class="drawer-backdrop" id="accountBackdrop"><section class="drawer" role="dialog" aria-modal="true" aria-labelledby="accountTitle"><div class="drawer-head"><h2 id="accountTitle">我的账号</h2><button class="close" id="closeAccountBtn">×</button></div><div class="account-card"><strong id="accountName">吃饭搭子</strong><small id="accountEmail"></small></div><button class="danger-btn" id="logoutBtn" style="width:100%;padding:11px">退出登录</button><p class="status" id="accountStatus"></p></section></div>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
