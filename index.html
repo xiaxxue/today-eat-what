@@ -8,11 +8,11 @@
   <style>
     :root { --orange:#ff8a00; --orange-dark:#ee7200; --ink:#242424; --muted:#8b8b8b; --line:#e7e7e7; --surface:#fff; --page:#f3f4f6; --soft:#f7f7f8; }
     * { box-sizing:border-box; }
-    html, body { margin:0; min-height:100%; background:#e7e9ec; color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; }
+    html, body { margin:0; height:100%; overflow:hidden; background:#e7e9ec; color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; }
     body { display:flex; justify-content:center; padding:12px; }
     button, input, select { font:inherit; }
     button { cursor:pointer; }
-    .app { width:min(430px,100%); min-height:calc(100vh - 24px); background:var(--page); border-radius:34px 34px 0 0; overflow:hidden; box-shadow:0 8px 30px #00000017; position:relative; display:flex; flex-direction:column; }
+    .app { width:min(430px,100%); height:calc(100dvh - 24px); min-height:0; background:var(--page); border-radius:34px 34px 0 0; overflow:hidden; box-shadow:0 8px 30px #00000017; position:relative; display:flex; flex-direction:column; }
     .topbar { height:68px; flex:none; display:flex; align-items:center; justify-content:space-between; padding:0 18px; background:#fff; border-bottom:1px solid var(--line); }
     .brand { display:flex; align-items:center; gap:6px; font-weight:800; font-size:20px; letter-spacing:.2px; }
     .brand span { font-size:20px; }
@@ -34,14 +34,14 @@
     .account-card { background:#fff8ee; border:1px solid #ffd09a; border-radius:17px; padding:15px; margin-bottom:12px; }
     .account-card strong { display:block; font-size:17px; margin-bottom:5px; }
     .account-card small { color:#888; word-break:break-all; }
-    .content { flex:1; overflow:auto; padding-bottom:90px; }
+    .content { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; padding-bottom:90px; }
     .view { display:none; padding:18px 16px 0; }
     .view.active { display:block; }
     .location-card { background:#fff; border-radius:16px; padding:13px 16px; display:flex; justify-content:space-between; align-items:center; box-shadow:0 4px 12px #00000008; }
     .location { font-size:13px; color:#424242; }
     .weather { color:var(--orange-dark); font-weight:800; }
     .weather small { background:#fff2e5; color:#a6784e; font-weight:600; padding:4px 7px; border-radius:10px; margin-left:6px; }
-    .hero { min-height:220px; margin-top:16px; border-radius:24px; background:#fff; display:flex; flex-direction:column; align-items:center; justify-content:center; box-shadow:0 7px 18px #0000000b; text-align:center; padding:20px; }
+    .hero { position:relative; min-height:260px; margin-top:16px; border-radius:24px; background:#fff; display:flex; flex-direction:column; align-items:center; justify-content:center; box-shadow:0 7px 18px #0000000b; text-align:center; padding:24px 20px; }
     .dice { width:68px; height:68px; perspective:420px; transform-style:preserve-3d; display:grid; place-items:center; margin-bottom:20px; filter:drop-shadow(0 8px 5px #0002); }
     .dice-cube { position:relative; width:52px; height:52px; transform-style:preserve-3d; transform:rotateX(-20deg) rotateY(32deg); will-change:transform; }
     .face { position:absolute; inset:0; display:grid; grid-template-columns:repeat(3,1fr); grid-template-rows:repeat(3,1fr); padding:7px; border:1px solid #c7c7c7; border-radius:9px; background:linear-gradient(145deg,#fff 8%,#ededed 58%,#cecece); box-shadow:inset 2px 2px 5px #fff,inset -2px -2px 5px #aaa5; backface-visibility:hidden; }
@@ -59,19 +59,29 @@
     .result { min-height:29px; font-size:17px; font-weight:750; color:#555; }
     .result.highlight { color:#f07800; font-size:22px; }
     .hint { color:#a1a1a1; font-size:14px; }
+    .result-status-chip { position:absolute; top:16px; right:16px; border-radius:999px; background:#fff0dc; color:#db7300; padding:6px 10px; font-size:11px; font-weight:800; }
+    .result-status-chip.confirmed { background:#eaf8f1; color:#18885e; }
     .pick-main { margin-top:16px; width:100%; border:0; border-radius:15px; padding:15px; color:#fff; background:linear-gradient(120deg,#ff9700,#ff7900); font-weight:800; box-shadow:0 7px 13px #ff8a0040; }
     .pick-main:active { transform:translateY(1px); }
-    .pick-main:disabled, .quick:disabled { opacity:.62; cursor:wait; }
-    .quick-row { display:grid; grid-template-columns:1fr 1.18fr 1fr; gap:10px; margin-top:15px; }
-    .quick { border:1px solid #e4e5e7; border-radius:15px; background:#f8f9fa; color:#555; padding:13px 8px; font-weight:700; font-size:13px; }
-    .quick.primary { color:#fff; background:var(--orange); border-color:var(--orange); box-shadow:0 7px 12px #ff8a0036; }
-    .quick span { display:block; font-size:20px; margin-bottom:5px; }
+    .pick-main:disabled { opacity:.62; cursor:wait; }
+    .decision-actions button:disabled { opacity:.62; cursor:default; }
+    .pick-main[hidden], .decision-actions[hidden] { display:none; }
+    .decision-actions { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:16px; }
+    .decision-actions button { min-height:54px; border-radius:15px; padding:12px; font-weight:800; }
+    .decision-secondary { border:1px solid #ff9c33; background:#fff; color:#df7400; }
+    .decision-primary { border:0; background:linear-gradient(120deg,#ff9700,#ff7900); color:#fff; box-shadow:0 7px 13px #ff8a0040; }
+    .decision-primary.loading { cursor:wait; }
+    .decision-primary.confirmed { opacity:1; cursor:default; background:#25a873; box-shadow:0 7px 13px #25a87330; }
+    .decision-helper { min-height:18px; margin-top:9px; color:#909090; font-size:11px; text-align:center; }
+    .decision-helper.ok { color:#18885e; font-weight:700; }
+    .decision-helper.fail { color:#d74444; }
     .chat { background:#fff; border-radius:18px; padding:13px 14px; margin-top:15px; color:#777; font-size:13px; }
     .chat b { color:#555; background:#fff1e2; padding:4px 7px; border-radius:5px; margin-right:3px; }
     .section-head { display:flex; justify-content:space-between; align-items:center; margin:0 2px 12px; }
     .section-title { margin:0; font-size:20px; font-weight:850; }
     .section-sub { color:var(--muted); font-size:12px; }
-    .toolbar { display:grid; grid-template-columns:1fr 108px; gap:9px; margin-bottom:10px; }
+    .toolbar { display:grid; grid-template-columns:minmax(0,1fr) 62px 108px; gap:8px; margin-bottom:10px; }
+    .search-btn { border:1px solid #ffad4b; border-radius:12px; background:#fff7ed; color:#db7300; font-size:12px; font-weight:800; }
     .input, .select { width:100%; border:1px solid #e0e1e3; border-radius:12px; background:#fff; padding:11px 12px; outline:0; }
     .input:focus { border-color:#ffad4b; box-shadow:0 0 0 3px #ffad4b22; }
     .orange-btn { width:100%; border:0; border-radius:12px; background:var(--orange); color:#fff; padding:11px 12px; font-weight:800; }
@@ -79,18 +89,36 @@
     .danger-btn { border:1px solid #ffc5c5; border-radius:10px; background:#fff; color:#ee5555; padding:8px 10px; }
     .restaurant-list { display:grid; gap:12px; margin-top:12px; }
     .restaurant-card { background:#fff; border-radius:17px; padding:15px 14px 13px; box-shadow:0 5px 15px #00000008; }
+    .restaurant-card.disabled { opacity:.62; }
     .restaurant-card .r-top { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
+    .restaurant-card .r-top > div:first-child { min-width:0; flex:1; }
     .restaurant-name { font-size:16px; font-weight:800; }
-    .r-actions { display:flex; gap:7px; }
+    .r-actions { display:flex; flex:0 0 auto; gap:7px; align-items:flex-start; }
+    .r-actions button { white-space:nowrap; }
+    .select-btn { border:0; border-radius:11px; background:#fff0dc; color:#db7300; padding:9px 12px; font-weight:800; }
+    .select-btn:disabled { opacity:.48; }
+    .card-menu { position:relative; }
+    .card-menu summary { list-style:none; width:36px; height:36px; display:grid; place-items:center; border:1px solid #e1e2e4; border-radius:11px; background:#fff; color:#666; font-size:19px; line-height:1; cursor:pointer; }
+    .card-menu summary::-webkit-details-marker { display:none; }
+    .card-menu[open] summary { border-color:#ffbd72; background:#fff8ef; color:#d87300; }
+    .card-menu-popover { position:absolute; top:42px; right:0; z-index:4; width:132px; padding:6px; border:1px solid #e7e7e7; border-radius:13px; background:#fff; box-shadow:0 10px 28px #0002; }
+    .card-menu-popover button { width:100%; border:0; border-radius:9px; background:transparent; padding:9px 10px; text-align:left; color:#333; font-size:13px; cursor:pointer; }
+    .card-menu-popover button:hover { background:#f6f6f6; }
+    .card-menu-popover .danger { color:#df4d4d; }
     .meta { color:#969696; font-size:12px; margin-top:7px; }
     .tag { display:inline-block; margin:8px 5px 0 0; padding:4px 8px; background:#f1f2f3; color:#666; border-radius:9px; font-size:11px; }
+    .location-tag { margin:0 5px 0 6px; background:#eaf4ff; color:#3178b7; vertical-align:2px; }
     .featured { background:#fff0dc; color:#db7300; font-weight:750; }
     .rating-row { margin-top:11px; padding-top:10px; border-top:1px solid #f0f0f0; display:flex; justify-content:space-between; align-items:center; gap:10px; }
     .stars { display:flex; align-items:center; gap:1px; }
     .star { border:0; background:transparent; color:#d3d3d3; font-size:21px; line-height:1; padding:2px; }
     .star.selected { color:#ff9900; text-shadow:0 1px 2px #ff990055; }
     .rating-copy { color:#858585; font-size:11px; white-space:nowrap; }
-    .visit-btn { border:1px solid #ffd49e; border-radius:10px; background:#fff9f0; color:#d97700; padding:7px 9px; font-size:12px; }
+    .visit-action { display:flex; align-items:center; gap:6px; color:#858585; font-size:11px; white-space:nowrap; }
+    .visit-stepper { display:grid; grid-template-columns:30px 28px 30px; align-items:center; overflow:hidden; border:1px solid #ffd49e; border-radius:10px; background:#fff9f0; color:#d97700; }
+    .visit-stepper button { height:30px; border:0; background:transparent; color:#d97700; font-size:17px; line-height:1; }
+    .visit-stepper button:disabled { color:#d8d8d8; background:#f7f7f7; }
+    .visit-stepper strong { text-align:center; font-size:12px; font-weight:800; }
     .card-foot { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:9px; }
     .empty { text-align:center; color:#999; padding:50px 0; }
     .stats-grid { display:grid; gap:14px; }
@@ -158,6 +186,15 @@
     .drawer-form[hidden] { display:none; }
     .drawer-form h3 { margin:0; font-size:14px; }
     .form-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .restaurant-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+    .restaurant-field { display:grid; gap:5px; min-width:0; }
+    .restaurant-field.full { grid-column:1 / -1; }
+    .restaurant-field label { color:#777; font-size:11px; font-weight:700; }
+    .restaurant-field .input { min-width:0; }
+    .availability-row { grid-column:1 / -1; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 12px; border:1px solid #e5e5e5; border-radius:12px; background:#fff; }
+    .availability-row span { display:grid; gap:2px; font-size:13px; font-weight:750; }
+    .availability-row small { color:#999; font-size:10px; font-weight:500; }
+    .availability-row input { width:20px; height:20px; accent-color:var(--orange); }
     .form-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
     .status { min-height:18px; margin:9px 2px 0; font-size:12px; color:#777; }
     .rename-backdrop { display:none; position:absolute; inset:0; z-index:8; align-items:center; justify-content:center; padding:24px; background:#0006; }
@@ -174,7 +211,7 @@
     @keyframes cubeRoll { 0%{transform:rotateX(-20deg) rotateY(32deg)} 16%{transform:rotateX(160deg) rotateY(32deg)} 33%{transform:rotateX(340deg) rotateY(32deg)} 50%{transform:rotateX(520deg) rotateY(32deg)} 67%{transform:rotateX(700deg) rotateY(32deg)} 84%{transform:rotateX(880deg) rotateY(32deg)} 100%{transform:rotateX(1060deg) rotateY(32deg)} }
     .dice.rolling { animation:diceHop 2s ease-in-out; }
     .dice.rolling .dice-cube { animation:cubeRoll 2s linear; }
-    @media (max-width:450px) { body { padding:0; } .app { min-height:100vh; border-radius:0; } }
+    @media (max-width:450px) { body { padding:0; } .app { height:100dvh; min-height:0; border-radius:0; } }
   </style>
 </head>
 <body>
@@ -182,9 +219,9 @@
     <div class="auth-gate" id="authGate"><section class="auth-card"><div class="auth-logo">🍽️</div><h1>今天去哪吃</h1><p>登录后，你的吃饭群、评分和抽选历史会安全地同步到所有设备。</p><div class="auth-tabs"><button class="auth-tab active" id="loginTab" type="button">登录</button><button class="auth-tab" id="signupTab" type="button">注册</button></div><form class="auth-form" id="authForm"><input class="input" id="authName" placeholder="昵称，如：小夏" maxlength="30" style="display:none" /><input class="input" id="authEmail" type="email" autocomplete="email" placeholder="邮箱" required /><input class="input" id="authPassword" type="password" autocomplete="current-password" minlength="8" placeholder="密码（至少 8 位）" required /><button class="orange-btn" id="authSubmit" type="submit">登录</button></form><p class="status" id="authStatus"></p><div class="auth-note">账号由 Supabase Auth 管理，密码不会存储在本页面。</div></section></div>
     <header class="topbar"><div class="brand"><span>🍽️</span>今天去哪吃</div><div class="top-actions"><button class="group-pill" id="groupOpenBtn" title="切换吃饭群">我的吃饭群</button><button class="icon-btn" id="accountBtn" aria-label="我的账号">👤</button><button class="icon-btn" id="helpBtn" aria-label="使用说明">?</button></div></header>
     <div class="content">
-      <section class="view active" data-view="pick"><div class="location-card"><span class="location">📍 上海 · 今天</span><span class="weather">☁️ 21°C <small>雷阵雨</small></span></div><div class="hero"><div class="dice" id="dice" aria-label="三维骰子"><div class="dice-cube"><span class="face front"><i class="dot p5"></i></span><span class="face back"><i class="dot p1"></i><i class="dot p3"></i><i class="dot p4"></i><i class="dot p6"></i><i class="dot p7"></i><i class="dot p9"></i></span><span class="face right"><i class="dot p1"></i><i class="dot p5"></i><i class="dot p9"></i></span><span class="face left"><i class="dot p1"></i><i class="dot p3"></i><i class="dot p7"></i><i class="dot p9"></i></span><span class="face top"><i class="dot p1"></i><i class="dot p9"></i></span><span class="face bottom"><i class="dot p1"></i><i class="dot p3"></i><i class="dot p5"></i><i class="dot p7"></i><i class="dot p9"></i></span></div></div><div class="result" id="result">点击“开始吧！”决定今天吃什么</div><div class="hint" id="countTip"></div></div><button class="pick-main" id="pickBtn">开始吧！</button><div class="chat"><b>不想挑</b><span>你也就配吃食堂</span></div><div class="quick-row"><button class="quick" id="rerollBtn"><span>🔄</span>换一个</button><button class="quick primary" id="quickPickBtn"><span>🎲</span>开始吧！</button><button class="quick" id="doneBtn"><span>✅</span>就它了！</button></div></section>
-      <section class="view" data-view="foods"><div class="section-head"><h2 class="section-title">🍴 群组餐厅库 <span id="listLen">(0)</span></h2><span class="section-sub" id="foodGroupTip"></span></div><div class="toolbar"><input class="input" id="searchInput" placeholder="搜索餐厅…" /><select class="select" id="categorySelect"><option value="">全部类型</option></select></div><button class="orange-btn" id="showAddBtn">＋ 添加餐厅</button><div id="addPanel" class="drawer-form" style="display:none;margin:12px 0 0"><h3>新增餐厅 / 菜品</h3><div class="form-row"><input class="input" id="nameInput" placeholder="名称，如：大米先生" /><input class="input" id="catInput" placeholder="类型，如：米饭类" /></div><button class="orange-btn" id="addBtn">保存到当前群</button></div><details class="import-box"><summary>导入 / 导出当前群数据</summary><div class="status">支持 JSON 数组或 CSV（name,category）。导入会覆盖当前群餐厅，并清空旧餐厅的评分与到访记录。</div><input id="fileInput" class="input" type="file" accept=".json,.csv,text/csv,application/json" /><div class="form-actions"><button class="outline-btn" id="importBtn">导入</button><button class="outline-btn" id="exportBtn">导出 JSON</button></div></details><div class="status" id="importStatus"></div><div class="restaurant-list" id="listWrap"></div></section>
-      <section class="view" data-view="stats"><div class="section-head"><h2 class="section-title">📊 群组精选</h2><span class="section-sub" id="statsGroupTip"></span></div><div class="stats-grid"><div class="stat-card"><h3>群友精选餐厅</h3><div id="rankList"></div></div><div class="stat-card big-stat"><strong id="mealTotal">0</strong><span>群组餐厅总数</span></div><div class="stat-card big-stat"><strong id="pickTotal">0</strong><span>群组累计到访</span></div></div></section>
+      <section class="view active" data-view="pick"><div class="location-card"><span class="location">📍 上海 · 今天</span><span class="weather">☁️ 21°C <small>雷阵雨</small></span></div><div class="hero"><span class="result-status-chip" id="resultStatusChip" hidden>待确认</span><div class="dice" id="dice" aria-label="三维骰子"><div class="dice-cube"><span class="face front"><i class="dot p5"></i></span><span class="face back"><i class="dot p1"></i><i class="dot p3"></i><i class="dot p4"></i><i class="dot p6"></i><i class="dot p7"></i><i class="dot p9"></i></span><span class="face right"><i class="dot p1"></i><i class="dot p5"></i><i class="dot p9"></i></span><span class="face left"><i class="dot p1"></i><i class="dot p3"></i><i class="dot p7"></i><i class="dot p9"></i></span><span class="face top"><i class="dot p1"></i><i class="dot p9"></i></span><span class="face bottom"><i class="dot p1"></i><i class="dot p3"></i><i class="dot p5"></i><i class="dot p7"></i><i class="dot p9"></i></span></div></div><div class="result" id="result">点击“随机一家”决定今天去哪家餐厅</div><div class="hint" id="countTip"></div></div><button class="pick-main" id="pickBtn">🎲 随机一家</button><div class="decision-actions" id="decisionActions" hidden><button class="decision-secondary" id="rerollBtn">换一家</button><button class="decision-primary" id="doneBtn">就吃这家</button></div><div class="decision-helper" id="decisionHelper"></div><div class="chat"><b>不想挑</b><span>你也就配吃食堂</span></div></section>
+      <section class="view" data-view="foods"><div class="section-head"><h2 class="section-title">🍴 群组餐厅库 <span id="listLen">(0)</span></h2><span class="section-sub" id="foodGroupTip"></span></div><div class="toolbar"><input class="input" id="searchInput" placeholder="搜索餐厅…" /><button class="search-btn" id="searchBtn" type="button">搜索</button><select class="select" id="categorySelect"><option value="">全部类型</option></select></div><button class="orange-btn" id="showAddBtn">＋ 添加餐厅</button><div id="addPanel" class="drawer-form" style="display:none;margin:12px 0 0"><h3 id="foodFormTitle">新增餐厅</h3><div class="restaurant-form-grid"><div class="restaurant-field full"><label for="nameInput">餐厅名称 *</label><input class="input" id="nameInput" maxlength="80" placeholder="如：大米先生" /></div><div class="restaurant-field"><label for="catInput">餐厅类型 *</label><input class="input" id="catInput" maxlength="40" placeholder="如：中式快餐" /></div><div class="restaurant-field"><label for="priceInput">人均价格（元）</label><input class="input" id="priceInput" type="number" min="0" step="1" inputmode="numeric" placeholder="如：32" /></div><div class="restaurant-field"><label for="distanceInput">距离（米）</label><input class="input" id="distanceInput" type="number" min="0" step="1" inputmode="numeric" placeholder="如：180" /></div><div class="restaurant-field"><label for="tagsInput">标签</label><input class="input" id="tagsInput" maxlength="300" placeholder="逗号分隔" /></div><label class="availability-row"><span>参与随机抽选<small>关闭后保留餐厅，但不会被抽中</small></span><input id="enabledInput" type="checkbox" checked /></label></div><div class="form-actions"><button class="outline-btn" id="cancelFoodBtn" type="button">取消</button><button class="orange-btn" id="addBtn" type="button">保存到当前群</button></div></div><details class="import-box"><summary>导入 / 导出当前群数据</summary><div class="status">支持 WorkBuddy JSON、通用 JSON 数组或 CSV。确认导入后会替换当前群餐厅，保留群和成员。</div><input id="fileInput" class="input" type="file" accept=".json,.csv,text/csv,application/json" /><div class="form-actions"><button class="outline-btn" id="importBtn">预览并替换</button><button class="outline-btn" id="exportBtn">导出 JSON</button></div></details><div class="status" id="importStatus"></div><div class="restaurant-list" id="listWrap"></div></section>
+      <section class="view" data-view="stats"><div class="section-head"><h2 class="section-title">📊 群组精选</h2><span class="section-sub" id="statsGroupTip"></span></div><div class="stats-grid"><div class="stat-card"><h3>群友精选餐厅</h3><div id="rankList"></div></div><div class="stat-card big-stat"><strong id="mealTotal">0</strong><span>群组餐厅总数</span></div><div class="stat-card big-stat"><strong id="pickTotal">0</strong><span>群组累计确定</span></div></div></section>
       <section class="view" data-view="history"><div class="section-head"><h2 class="section-title">📜 我的抽选历史</h2><button class="outline-btn" id="clearHistoryBtn">清空</button></div><div class="history-list" id="historyList"></div></section>
     </div>
     <nav class="bottom-nav" aria-label="主导航"><button class="nav-btn active" data-target="pick"><span>🏷️</span>抽选</button><button class="nav-btn" data-target="foods"><span>🍴</span>餐厅</button><button class="nav-btn" data-target="stats"><span>☷</span>统计</button><button class="nav-btn" data-target="history"><span>⏱️</span>历史</button></nav>

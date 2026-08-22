@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   code TEXT NOT NULL UNIQUE,
+  distance_origin_name TEXT,
+  distance_origin_unit TEXT NOT NULL DEFAULT 'm',
   created_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 `;
@@ -22,6 +24,16 @@ CREATE TABLE IF NOT EXISTS foods (
   name TEXT NOT NULL,
   category TEXT DEFAULT '未分类',
   group_id INTEGER NOT NULL,
+  legacy_id TEXT,
+  avg_price_yuan INTEGER,
+  distance_m INTEGER,
+  location_label TEXT,
+  tags_json TEXT NOT NULL DEFAULT '[]',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  imported_confirmed_count INTEGER NOT NULL DEFAULT 0,
+  app_confirmed_count INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT 'manual',
+  source_created_at TEXT,
   updated_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 `;
@@ -84,6 +96,29 @@ function ensureDb() {
   db.exec(TABLE_RATINGS_SQL);
   db.exec(TABLE_VISITS_SQL);
 
+  const ensureColumns = (table, columns) => {
+    const existing = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((column) => column.name));
+    for (const [name, definition] of Object.entries(columns)) {
+      if (!existing.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+    }
+  };
+  ensureColumns('groups', {
+    distance_origin_name: 'TEXT',
+    distance_origin_unit: "TEXT NOT NULL DEFAULT 'm'",
+  });
+  ensureColumns('foods', {
+    legacy_id: 'TEXT',
+    avg_price_yuan: 'INTEGER',
+    distance_m: 'INTEGER',
+    location_label: 'TEXT',
+    tags_json: "TEXT NOT NULL DEFAULT '[]'",
+    enabled: 'INTEGER NOT NULL DEFAULT 1',
+    imported_confirmed_count: 'INTEGER NOT NULL DEFAULT 0',
+    app_confirmed_count: 'INTEGER NOT NULL DEFAULT 0',
+    source: "TEXT NOT NULL DEFAULT 'manual'",
+    source_created_at: 'TEXT',
+  });
+
   const hasGroupId = db
     .prepare('PRAGMA table_info(foods)')
     .all()
@@ -105,15 +140,7 @@ function ensureDb() {
 
   const defaultCount = db.prepare('SELECT COUNT(*) as c FROM foods WHERE group_id = ?').get(defaultGroupId).c;
   if (defaultCount === 0) {
-    const seed = [
-      ['番茄鸡蛋盖浇饭', '主食'],
-      ['番茄牛腩面', '面食'],
-      ['酸辣土豆丝', '热菜'],
-      ['清炒西蓝花', '素菜'],
-      ['红烧排骨', '热菜'],
-      ['麻婆豆腐', '热菜'],
-      ['蛋炒饭', '主食'],
-    ];
+    const seed = [['大米先生', '中式快餐'], ['乡村基', '中式快餐'], ['麦当劳', '西式快餐']];
     const ins = db.prepare('INSERT INTO foods (name, category, group_id) VALUES (?, ?, ?)');
     runTransaction(() => {
       for (const [name, category] of seed) {
@@ -128,7 +155,7 @@ function ensureDb() {
 const { defaultGroupId } = ensureDb();
 
 const GROUP_FIELDS_SQL = `
-SELECT g.id, g.name, g.code,
+SELECT g.id, g.name, g.code, g.distance_origin_name, g.distance_origin_unit,
   (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id = g.id) AS member_count
 FROM groups g
 `;
@@ -141,10 +168,15 @@ const stmtGroupById = db.prepare(`${GROUP_FIELDS_SQL} WHERE g.id = ?`);
 const stmtGroupByCode = db.prepare(`${GROUP_FIELDS_SQL} WHERE g.code = ? COLLATE NOCASE`);
 const stmtCreateGroup = db.prepare('INSERT INTO groups (name, code) VALUES (?, ?)');
 const stmtFoodsByGroup = db.prepare(`
-SELECT f.id, f.name, f.category,
+SELECT f.id, f.name, f.category, f.legacy_id, f.avg_price_yuan, f.distance_m, f.location_label,
+  f.tags_json, f.enabled, f.imported_confirmed_count, f.app_confirmed_count, f.source, f.source_created_at,
   COALESCE(ROUND(AVG(fr.score), 1), 0) AS rating,
   COUNT(DISTINCT fr.member_id) AS rating_count,
-  (SELECT COUNT(*) FROM food_visits fv WHERE fv.food_id = f.id) AS visit_count,
+  ((SELECT COUNT(*) FROM food_visits fv WHERE fv.food_id = f.id) + f.imported_confirmed_count) AS visit_count,
+  ((SELECT COUNT(*) FROM food_visits mine_visit
+    JOIN group_members mine_member ON mine_member.id = mine_visit.member_id
+    WHERE mine_visit.food_id = f.id AND mine_member.group_id = f.group_id AND mine_member.token = ?
+  ) + f.imported_confirmed_count) AS my_visit_count,
   COALESCE((
     SELECT mine.score
     FROM food_ratings mine
@@ -157,8 +189,19 @@ WHERE f.group_id = ?
 GROUP BY f.id
 ORDER BY rating DESC, visit_count DESC, rating_count DESC, f.id ASC
 `);
-const stmtInsert = db.prepare('INSERT INTO foods (name, category, group_id) VALUES (?, ?, ?)');
+const stmtInsert = db.prepare(`INSERT INTO foods
+  (name, category, group_id, legacy_id, avg_price_yuan, distance_m, location_label, tags_json, enabled, imported_confirmed_count, source, source_created_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+const stmtUpdateFood = db.prepare(`UPDATE foods SET
+  name = ?, category = ?, avg_price_yuan = ?, distance_m = ?, location_label = ?, tags_json = ?, enabled = ?, updated_at = datetime('now', 'localtime')
+  WHERE id = ? AND group_id = ?`);
 const stmtDelete = db.prepare('DELETE FROM foods WHERE id = ? AND group_id = ?');
+const stmtConfirmFood = db.prepare(`UPDATE foods
+  SET app_confirmed_count = app_confirmed_count + 1, updated_at = datetime('now', 'localtime')
+  WHERE id = ? AND group_id = ?`);
+const stmtDecrementImportedVisit = db.prepare(`UPDATE foods
+  SET imported_confirmed_count = imported_confirmed_count - 1, updated_at = datetime('now', 'localtime')
+  WHERE id = ? AND group_id = ? AND imported_confirmed_count > 0`);
 const stmtClearGroup = db.prepare('DELETE FROM foods WHERE group_id = ?');
 const stmtFoodByIdAndGroup = db.prepare('SELECT id, name, category, group_id FROM foods WHERE id = ? AND group_id = ?');
 const stmtMemberByToken = db.prepare('SELECT id, group_id, token, name, joined_at FROM group_members WHERE group_id = ? AND token = ?');
@@ -177,6 +220,9 @@ INSERT INTO food_ratings (food_id, member_id, score) VALUES (?, ?, ?)
 ON CONFLICT(food_id, member_id) DO UPDATE SET score = excluded.score, updated_at = datetime('now', 'localtime')
 `);
 const stmtInsertVisit = db.prepare('INSERT INTO food_visits (food_id, member_id) VALUES (?, ?)');
+const stmtDeleteLatestVisit = db.prepare(`DELETE FROM food_visits WHERE id = (
+  SELECT id FROM food_visits WHERE food_id = ? AND member_id = ? ORDER BY id DESC LIMIT 1
+)`);
 
 function randomCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -226,7 +272,7 @@ function writeJson(res, statusCode, data) {
   res.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+    'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
   });
   res.end(json);
@@ -243,9 +289,40 @@ function writeText(res, statusCode, content, type = 'text/plain; charset=utf-8')
 function normalizeFood(item) {
   if (!item || typeof item !== 'object') return null;
   const name = typeof item.name === 'string' ? item.name.trim() : '';
-  if (!name) return null;
-  const category = typeof item.category === 'string' && item.category.trim() ? item.category.trim() : '未分类';
-  return { name, category };
+  const categoryValue = item.category ?? item.type;
+  const category = typeof categoryValue === 'string' && categoryValue.trim() ? categoryValue.trim() : '未分类';
+  const legacyValue = item.legacy_id ?? item.legacyId ?? (typeof item.id === 'string' ? item.id : null);
+  const legacy_id = typeof legacyValue === 'string' && legacyValue.trim() ? legacyValue.trim() : null;
+  const avg_price_yuan = numberOrNull(item.avg_price_yuan ?? item.avgPriceYuan ?? item.price);
+  const distance_m = numberOrNull(item.distance_m ?? item.distanceM ?? item.distance);
+  const locationValue = item.location_label ?? item.locationLabel ?? item.area ?? item.district;
+  const location_label = typeof locationValue === 'string' && locationValue.trim() ? locationValue.trim() : null;
+  const tags = Array.isArray(item.tags) ? [...new Set(item.tags.map((tag) => String(tag).trim()).filter(Boolean))].slice(0, 30) : [];
+  const enabled = item.enabled ?? item.isAvailable ?? true;
+  const imported_confirmed_count = nonNegativeInteger(item.imported_confirmed_count ?? item.confirmed_count ?? item.selectCount ?? 0);
+  const source = typeof item.source === 'string' && item.source.trim() ? item.source.trim() : 'manual';
+  const source_created_at = typeof (item.created_at ?? item.createdAt) === 'string' ? (item.created_at ?? item.createdAt) : null;
+  if (!name || name.length > 80 || category.length > 40 || location_label?.length > 50 || legacy_id?.length > 120 || source.length > 30) return null;
+  if (avg_price_yuan === false || distance_m === false || imported_confirmed_count === null) return null;
+  return { name, category, location_label, legacy_id, avg_price_yuan, distance_m, tags, enabled: Boolean(enabled), imported_confirmed_count, source, source_created_at };
+}
+
+function numberOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.round(number) : false;
+}
+
+function nonNegativeInteger(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : null;
+}
+
+function importPayload(body) {
+  const items = Array.isArray(body) ? body : body?.restaurants;
+  if (!Array.isArray(items)) return null;
+  const origin = Array.isArray(body) ? null : body.distance_origin ?? body.distanceOrigin ?? null;
+  return { items, origin };
 }
 
 function normalizeMember(body) {
@@ -272,7 +349,12 @@ function hasGroupAccess(groupId, url) {
 }
 
 function foodRowsForGroup(groupId, memberToken = '') {
-  return stmtFoodsByGroup.all(memberToken, groupId);
+  return stmtFoodsByGroup.all(memberToken, memberToken, groupId).map((row) => ({
+    ...row,
+    enabled: Boolean(row.enabled),
+    tags: JSON.parse(row.tags_json || '[]'),
+    confirmed_count: (Number(row.imported_confirmed_count) || 0) + (Number(row.app_confirmed_count) || 0),
+  }));
 }
 
 function idFromMatch(match) {
@@ -294,7 +376,7 @@ async function handleRequest(req, res) {
   if (method === 'OPTIONS') {
     res.writeHead(200, {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+      'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
     });
     res.end();
@@ -314,12 +396,14 @@ async function handleRequest(req, res) {
     const body = await parseBody(req);
     if (!body) return writeJson(res, 400, { ok: false, msg: 'invalid json' });
     const normalized = normalizeFood(body);
-    if (!normalized) return writeJson(res, 400, { ok: false, msg: 'invalid food item' });
+    if (!normalized) return writeJson(res, 400, { ok: false, msg: '餐厅信息不正确' });
     const group = resolveGroupFromRequest(url, body);
     if (!group) return writeJson(res, 404, { ok: false, msg: 'group not found' });
     if (!hasGroupAccess(group.id, url)) return writeJson(res, 403, { ok: false, msg: 'join this group first' });
-    const result = stmtInsert.run(normalized.name, normalized.category, group.id);
-    const newRow = { id: result.lastInsertRowid, name: normalized.name, category: normalized.category, group_id: group.id };
+    const result = stmtInsert.run(normalized.name, normalized.category, group.id, normalized.legacy_id, normalized.avg_price_yuan,
+      normalized.distance_m, normalized.location_label, JSON.stringify(normalized.tags), normalized.enabled ? 1 : 0, normalized.imported_confirmed_count,
+      normalized.source, normalized.source_created_at);
+    const newRow = foodRowsForGroup(group.id, memberTokenFromUrl(url)).find((item) => Number(item.id) === Number(result.lastInsertRowid));
     writeJson(res, 201, { ok: true, food: newRow });
     return;
   }
@@ -363,6 +447,57 @@ async function handleRequest(req, res) {
     writeJson(res, 201, { ok: true, food: updated, member });
     return;
   }
+  if (visitMatch && method === 'DELETE') {
+    const foodId = idFromMatch(visitMatch);
+    const group = resolveGroupFromRequest(url);
+    if (!foodId || !group) return writeJson(res, 404, { ok: false, msg: '餐厅或群组不存在' });
+    const food = stmtFoodByIdAndGroup.get(foodId, group.id);
+    if (!food) return writeJson(res, 404, { ok: false, msg: '群里没有这个餐厅' });
+    const member = stmtMemberByToken.get(group.id, memberTokenFromUrl(url));
+    if (!member) return writeJson(res, 403, { ok: false, msg: '请先加入这个群' });
+    const info = stmtDeleteLatestVisit.run(food.id, member.id);
+    if (!info.changes && !stmtDecrementImportedVisit.run(food.id, group.id).changes) {
+      return writeJson(res, 409, { ok: false, msg: '没有可撤销的到访记录' });
+    }
+    const updated = foodRowsForGroup(group.id, member.token).find((item) => item.id === food.id);
+    writeJson(res, 200, { ok: true, food: updated, member });
+    return;
+  }
+
+  const confirmMatch = url.pathname.match(/^\/api\/foods\/(\d+)\/confirm$/);
+  if (confirmMatch && method === 'POST') {
+    const foodId = idFromMatch(confirmMatch);
+    const group = resolveGroupFromRequest(url);
+    if (!foodId || !group) return writeJson(res, 404, { ok: false, msg: '餐厅或群组不存在' });
+    const member = stmtMemberByToken.get(group.id, memberTokenFromUrl(url));
+    if (!member) return writeJson(res, 403, { ok: false, msg: '请先加入这个群' });
+    let info;
+    runTransaction(() => {
+      info = stmtConfirmFood.run(foodId, group.id);
+      if (info.changes) stmtInsertVisit.run(foodId, member.id);
+    });
+    if (!info.changes) return writeJson(res, 404, { ok: false, msg: '群里没有这个餐厅' });
+    const updated = foodRowsForGroup(group.id, member.token).find((item) => Number(item.id) === foodId);
+    writeJson(res, 201, { ok: true, food: updated });
+    return;
+  }
+
+  const updateFoodMatch = url.pathname.match(/^\/api\/foods\/(\d+)$/);
+  if (updateFoodMatch && method === 'PATCH') {
+    const foodId = idFromMatch(updateFoodMatch);
+    const body = await parseBody(req);
+    const group = resolveGroupFromRequest(url, body);
+    const normalized = normalizeFood(body);
+    if (!foodId || !group) return writeJson(res, 404, { ok: false, msg: '餐厅或群组不存在' });
+    if (!hasGroupAccess(group.id, url)) return writeJson(res, 403, { ok: false, msg: '请先加入这个群' });
+    if (!normalized) return writeJson(res, 400, { ok: false, msg: '餐厅信息不正确' });
+    const info = stmtUpdateFood.run(normalized.name, normalized.category, normalized.avg_price_yuan, normalized.distance_m,
+      normalized.location_label, JSON.stringify(normalized.tags), normalized.enabled ? 1 : 0, foodId, group.id);
+    if (!info.changes) return writeJson(res, 404, { ok: false, msg: '群里没有这个餐厅' });
+    const updated = foodRowsForGroup(group.id, memberTokenFromUrl(url)).find((item) => Number(item.id) === foodId);
+    writeJson(res, 200, { ok: true, food: updated });
+    return;
+  }
 
   if (url.pathname.startsWith('/api/foods/') && method === 'DELETE') {
     const id = getIdFromPath(url.pathname);
@@ -378,18 +513,23 @@ async function handleRequest(req, res) {
 
   if (url.pathname === '/api/foods/import' && method === 'POST') {
     const body = await parseBody(req);
-    if (!Array.isArray(body)) return writeJson(res, 400, { ok: false, msg: 'json array required' });
+    const payload = importPayload(body);
+    if (!payload) return writeJson(res, 400, { ok: false, msg: '需要餐厅数组或包含 restaurants 的 JSON' });
     const group = resolveGroupFromRequest(url, {});
     if (!group) return writeJson(res, 404, { ok: false, msg: 'group not found' });
     if (!hasGroupAccess(group.id, url)) return writeJson(res, 403, { ok: false, msg: 'join this group first' });
-    const next = body.map(normalizeFood).filter(Boolean);
+    const next = payload.items.map(normalizeFood).filter(Boolean);
     if (!next.length) return writeJson(res, 400, { ok: false, msg: 'no valid items' });
 
     runTransaction(() => {
       stmtClearGroup.run(group.id);
-      const ins = db.prepare('INSERT INTO foods (name, category, group_id) VALUES (?, ?, ?)');
       for (const item of next) {
-        ins.run(item.name, item.category, group.id);
+        stmtInsert.run(item.name, item.category, group.id, item.legacy_id, item.avg_price_yuan, item.distance_m,
+          item.location_label, JSON.stringify(item.tags), item.enabled ? 1 : 0, item.imported_confirmed_count, item.source, item.source_created_at);
+      }
+      if (payload.origin?.name) {
+        db.prepare('UPDATE groups SET distance_origin_name = ?, distance_origin_unit = ? WHERE id = ?')
+          .run(String(payload.origin.name).trim(), String(payload.origin.unit || 'm').trim(), group.id);
       }
     });
 

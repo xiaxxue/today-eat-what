@@ -209,11 +209,42 @@ async function readBody(request) {
 function normalizeFood(item) {
   if (!item || typeof item !== 'object') return null;
   const name = typeof item.name === 'string' ? item.name.trim() : '';
-  const category = typeof item.category === 'string' && item.category.trim()
-    ? item.category.trim()
+  const categoryValue = item.category ?? item.type;
+  const category = typeof categoryValue === 'string' && categoryValue.trim()
+    ? categoryValue.trim()
     : '未分类';
-  if (!name || name.length > 80 || category.length > 40) return null;
-  return { name, category };
+  const legacyValue = item.legacy_id ?? item.legacyId ?? (typeof item.id === 'string' ? item.id : null);
+  const legacy_id = typeof legacyValue === 'string' && legacyValue.trim() ? legacyValue.trim() : null;
+  const avg_price_yuan = numberOrNull(item.avg_price_yuan ?? item.avgPriceYuan ?? item.price);
+  const distance_m = numberOrNull(item.distance_m ?? item.distanceM ?? item.distance);
+  const locationValue = item.location_label ?? item.locationLabel ?? item.area ?? item.district;
+  const location_label = typeof locationValue === 'string' && locationValue.trim() ? locationValue.trim() : null;
+  const tags = Array.isArray(item.tags) ? [...new Set(item.tags.map((tag) => String(tag).trim()).filter(Boolean))].slice(0, 30) : [];
+  const enabled = item.enabled ?? item.isAvailable ?? true;
+  const imported_confirmed_count = nonNegativeInteger(item.imported_confirmed_count ?? item.confirmed_count ?? item.selectCount ?? 0);
+  const source = typeof item.source === 'string' && item.source.trim() ? item.source.trim() : 'manual';
+  const source_created_at = typeof (item.created_at ?? item.createdAt) === 'string' ? (item.created_at ?? item.createdAt) : null;
+  if (!name || name.length > 80 || category.length > 40 || location_label?.length > 50 || legacy_id?.length > 120 || source.length > 30) return null;
+  if (avg_price_yuan === false || distance_m === false || imported_confirmed_count === null) return null;
+  return { name, category, location_label, legacy_id, avg_price_yuan, distance_m, tags, enabled: Boolean(enabled), imported_confirmed_count, source, source_created_at };
+}
+
+function numberOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.round(number) : false;
+}
+
+function nonNegativeInteger(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : null;
+}
+
+function importPayload(body) {
+  const items = Array.isArray(body) ? body : body?.restaurants;
+  if (!Array.isArray(items)) return null;
+  const origin = Array.isArray(body) ? null : body.distance_origin ?? body.distanceOrigin ?? null;
+  return { items, origin };
 }
 
 function positiveId(value) {
@@ -341,9 +372,9 @@ async function ensurePersonalGroup(db, user) {
   await upsertUserMember(db, group.id, user, 'owner');
   if (createdPersonal) {
     await db.insert('foods', [
-      { name: '番茄鸡蛋盖浇饭', category: '主食', group_id: group.id },
-      { name: '番茄牛腩面', category: '面食', group_id: group.id },
-      { name: '酸辣土豆丝', category: '热菜', group_id: group.id },
+      { name: '大米先生', category: '中式快餐', group_id: group.id },
+      { name: '乡村基', category: '中式快餐', group_id: group.id },
+      { name: '麦当劳', category: '西式快餐', group_id: group.id },
     ]);
   }
   return group;
@@ -367,19 +398,22 @@ async function requireGroupAccess(db, group, user) {
 
 async function foodRowsForGroup(db, groupId, memberId) {
   const foods = await db.list('foods', {
-    select: 'id,name,category,group_id,updated_at',
+    select: 'id,name,category,group_id,legacy_id,avg_price_yuan,distance_m,location_label,tags,enabled,imported_confirmed_count,source,source_created_at,updated_at',
     group_id: `eq.${groupId}`,
     order: 'id.asc',
     limit: 1000,
   });
   if (!foods.length) return [];
   const foodIds = foods.map((food) => food.id);
-  const [ratings, visits] = await Promise.all([
+  const [ratings, visits, picks] = await Promise.all([
     db.list('food_ratings', { select: 'food_id,member_id,score', food_id: idsFilter(foodIds), limit: 10000 }),
     db.list('food_visits', { select: 'food_id,member_id', food_id: idsFilter(foodIds), limit: 10000 }),
+    db.list('meal_picks', { select: 'food_id', group_id: `eq.${groupId}`, food_id: idsFilter(foodIds), limit: 10000 }),
   ]);
   const byFoodRatings = new Map();
   const byFoodVisits = new Map();
+  const byFoodMyVisits = new Map();
+  const byFoodPicks = new Map();
   for (const rating of ratings) {
     const list = byFoodRatings.get(Number(rating.food_id)) || [];
     list.push(rating);
@@ -388,6 +422,13 @@ async function foodRowsForGroup(db, groupId, memberId) {
   for (const visit of visits) {
     const id = Number(visit.food_id);
     byFoodVisits.set(id, (byFoodVisits.get(id) || 0) + 1);
+    if (Number(visit.member_id) === Number(memberId)) {
+      byFoodMyVisits.set(id, (byFoodMyVisits.get(id) || 0) + 1);
+    }
+  }
+  for (const pick of picks) {
+    const id = Number(pick.food_id);
+    byFoodPicks.set(id, (byFoodPicks.get(id) || 0) + 1);
   }
   return foods.map((food) => {
     const id = Number(food.id);
@@ -401,8 +442,10 @@ async function foodRowsForGroup(db, groupId, memberId) {
       group_id: Number(food.group_id),
       rating: foodRatings.length ? Math.round((total / foodRatings.length) * 10) / 10 : 0,
       rating_count: uniqueMembers.size,
-      visit_count: byFoodVisits.get(id) || 0,
+      visit_count: (byFoodVisits.get(id) || 0) + (Number(food.imported_confirmed_count) || 0),
+      my_visit_count: (byFoodMyVisits.get(id) || 0) + (Number(food.imported_confirmed_count) || 0),
       my_rating: mine ? Number(mine.score) : 0,
+      confirmed_count: (Number(food.imported_confirmed_count) || 0) + (byFoodPicks.get(id) || 0),
     };
   }).sort((a, b) => b.rating - a.rating || b.visit_count - a.visit_count || b.rating_count - a.rating_count || a.id - b.id);
 }
@@ -632,7 +675,7 @@ async function handleApi(request, env) {
     const group = await resolveGroup(db, url, body, user);
     const member = await requireGroupAccess(db, group, user);
     if (!Number.isInteger(score) || score < 1 || score > 5) throw new ApiError(400, '评分需要是 1-5 星');
-    const foods = await db.list('foods', { select: 'id', id: `eq.${foodId}`, group_id: `eq.${group.id}`, limit: 1 });
+    const foods = await db.list('foods', { select: 'id,imported_confirmed_count', id: `eq.${foodId}`, group_id: `eq.${group.id}`, limit: 1 });
     if (!foods[0]) throw new ApiError(404, '群里没有这个餐厅');
     await db.upsert('food_ratings', { food_id: foodId, member_id: member.id, score, updated_at: new Date().toISOString() }, 'food_id,member_id');
     const updated = (await foodRowsForGroup(db, group.id, member.id)).find((item) => item.id === foodId);
@@ -651,8 +694,49 @@ async function handleApi(request, env) {
     const updated = (await foodRowsForGroup(db, group.id, member.id)).find((item) => item.id === foodId);
     return json({ ok: true, food: updated, member }, 201);
   }
+  if (visits && method === 'DELETE') {
+    const foodId = positiveId(visits[1]);
+    const group = await resolveGroup(db, url, null, user);
+    const member = await requireGroupAccess(db, group, user);
+    const foods = await db.list('foods', { select: 'id,imported_confirmed_count', id: `eq.${foodId}`, group_id: `eq.${group.id}`, limit: 1 });
+    if (!foods[0]) throw new ApiError(404, '群里没有这个餐厅');
+    const latest = await db.list('food_visits', {
+      select: 'id', food_id: `eq.${foodId}`, member_id: `eq.${member.id}`, order: 'id.desc', limit: 1,
+    });
+    if (latest[0]) {
+      const removed = await db.remove('food_visits', { id: `eq.${latest[0].id}`, member_id: `eq.${member.id}` });
+      if (!removed?.length) throw new ApiError(409, '这次到访已经被撤销');
+    } else if (Number(foods[0].imported_confirmed_count) > 0) {
+      await db.update('foods', { id: `eq.${foodId}`, group_id: `eq.${group.id}` }, {
+        imported_confirmed_count: Number(foods[0].imported_confirmed_count) - 1,
+        updated_at: new Date().toISOString(),
+      });
+    } else throw new ApiError(409, '没有可撤销的到访记录');
+    const updated = (await foodRowsForGroup(db, group.id, member.id)).find((item) => item.id === foodId);
+    return json({ ok: true, food: updated, member });
+  }
 
   const deleteFood = pathname.match(/^\/api\/foods\/(\d+)$/);
+  if (deleteFood && method === 'PATCH') {
+    const foodId = positiveId(deleteFood[1]);
+    const body = await readBody(request);
+    const food = normalizeFood(body);
+    const group = await resolveGroup(db, url, body, user);
+    const member = await requireGroupAccess(db, group, user);
+    if (!food) throw new ApiError(400, '餐厅信息不正确');
+    const updated = await db.update('foods', { id: `eq.${foodId}`, group_id: `eq.${group.id}` }, {
+      name: food.name,
+      category: food.category,
+      avg_price_yuan: food.avg_price_yuan,
+      distance_m: food.distance_m,
+      location_label: food.location_label,
+      tags: food.tags,
+      enabled: food.enabled,
+      updated_at: new Date().toISOString(),
+    });
+    if (!updated?.length) throw new ApiError(404, '餐厅不存在');
+    return json({ ok: true, food: updated[0] });
+  }
   if (deleteFood && method === 'DELETE') {
     const foodId = positiveId(deleteFood[1]);
     const group = await resolveGroup(db, url, null, user);
@@ -664,12 +748,18 @@ async function handleApi(request, env) {
 
   if (pathname === '/api/foods/import' && method === 'POST') {
     const body = await readBody(request);
-    if (!Array.isArray(body)) throw new ApiError(400, '需要 JSON 数组');
+    const payload = importPayload(body);
+    if (!payload) throw new ApiError(400, '需要餐厅数组或包含 restaurants 的 JSON');
     const group = await resolveGroup(db, url, null, user);
     const member = await requireGroupAccess(db, group, user);
-    const next = body.map(normalizeFood).filter(Boolean);
+    const next = payload.items.map(normalizeFood).filter(Boolean);
     if (!next.length) throw new ApiError(400, '没有可导入的数据');
-    await db.rpc('replace_group_foods', { p_group_id: group.id, p_items: next });
+    await db.rpc('replace_group_restaurants', {
+      p_group_id: group.id,
+      p_items: next,
+      p_origin_name: payload.origin?.name ? String(payload.origin.name).trim() : null,
+      p_origin_unit: payload.origin?.unit ? String(payload.origin.unit).trim() : 'm',
+    });
     const foods = await foodRowsForGroup(db, group.id, member.id);
     return json({ ok: true, foods, total: foods.length, group: await groupWithCount(db, group, user.id) });
   }
@@ -698,7 +788,7 @@ async function handleApi(request, env) {
     const body = await readBody(request);
     const foodId = positiveId(body?.foodId);
     const group = await resolveGroup(db, url, body, user);
-    await requireGroupAccess(db, group, user);
+    const member = await requireGroupAccess(db, group, user);
     const foods = await db.list('foods', { select: 'id,name,category', id: `eq.${foodId}`, group_id: `eq.${group.id}`, limit: 1 });
     if (!foods[0]) throw new ApiError(404, '群里没有这个餐厅');
     const created = await db.insert('meal_picks', {
@@ -708,6 +798,7 @@ async function handleApi(request, env) {
       food_name: foods[0].name,
       category: foods[0].category || '未分类',
     });
+    await db.insert('food_visits', { food_id: foodId, member_id: member.id });
     return json({ ok: true, item: created[0] }, 201);
   }
 

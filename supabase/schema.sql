@@ -7,6 +7,8 @@ create table if not exists public.groups (
   code text not null unique check (char_length(code) between 3 and 32),
   owner_id uuid references auth.users(id) on delete set null,
   is_personal boolean not null default false,
+  distance_origin_name text,
+  distance_origin_unit text not null default 'm',
   created_at timestamptz not null default now()
 );
 
@@ -15,6 +17,15 @@ create table if not exists public.foods (
   name text not null check (char_length(name) between 1 and 80),
   category text not null default '未分类',
   group_id bigint not null references public.groups(id) on delete cascade,
+  legacy_id text,
+  avg_price_yuan integer check (avg_price_yuan is null or avg_price_yuan >= 0),
+  distance_m integer check (distance_m is null or distance_m >= 0),
+  location_label text check (location_label is null or char_length(location_label) <= 50),
+  tags jsonb not null default '[]'::jsonb,
+  enabled boolean not null default true,
+  imported_confirmed_count integer not null default 0 check (imported_confirmed_count >= 0),
+  source text not null default 'manual',
+  source_created_at timestamptz,
   updated_at timestamptz not null default now()
 );
 
@@ -63,6 +74,20 @@ alter table public.groups
   add column if not exists owner_id uuid references auth.users(id) on delete set null;
 alter table public.groups
   add column if not exists is_personal boolean not null default false;
+alter table public.groups
+  add column if not exists distance_origin_name text;
+alter table public.groups
+  add column if not exists distance_origin_unit text not null default 'm';
+
+alter table public.foods add column if not exists legacy_id text;
+alter table public.foods add column if not exists avg_price_yuan integer;
+alter table public.foods add column if not exists distance_m integer;
+alter table public.foods add column if not exists location_label text;
+alter table public.foods add column if not exists tags jsonb not null default '[]'::jsonb;
+alter table public.foods add column if not exists enabled boolean not null default true;
+alter table public.foods add column if not exists imported_confirmed_count integer not null default 0;
+alter table public.foods add column if not exists source text not null default 'manual';
+alter table public.foods add column if not exists source_created_at timestamptz;
 
 alter table public.group_members
   add column if not exists user_id uuid references auth.users(id) on delete cascade;
@@ -149,6 +174,64 @@ $$;
 revoke all on function public.replace_group_foods(bigint, jsonb) from public, anon, authenticated;
 grant execute on function public.replace_group_foods(bigint, jsonb) to service_role;
 
+-- 导入完整餐厅包：保留群和成员，仅替换该群餐厅及其从属记录。
+create or replace function public.replace_group_restaurants(
+  p_group_id bigint,
+  p_items jsonb,
+  p_origin_name text default null,
+  p_origin_unit text default 'm'
+)
+returns setof public.foods
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  delete from public.foods where group_id = p_group_id;
+
+  update public.groups
+  set distance_origin_name = nullif(trim(p_origin_name), ''),
+      distance_origin_unit = coalesce(nullif(trim(p_origin_unit), ''), 'm')
+  where id = p_group_id;
+
+  return query
+  insert into public.foods (
+    name, category, group_id, legacy_id, avg_price_yuan, distance_m, location_label, tags,
+    enabled, imported_confirmed_count, source, source_created_at
+  )
+  select
+    item.name,
+    coalesce(nullif(trim(item.category), ''), '未分类'),
+    p_group_id,
+    nullif(trim(item.legacy_id), ''),
+    item.avg_price_yuan,
+    item.distance_m,
+    nullif(trim(item.location_label), ''),
+    coalesce(item.tags, '[]'::jsonb),
+    coalesce(item.enabled, true),
+    coalesce(item.imported_confirmed_count, 0),
+    coalesce(nullif(trim(item.source), ''), 'manual'),
+    item.source_created_at
+  from jsonb_to_recordset(p_items) as item(
+    name text,
+    category text,
+    legacy_id text,
+    avg_price_yuan integer,
+    distance_m integer,
+    location_label text,
+    tags jsonb,
+    enabled boolean,
+    imported_confirmed_count integer,
+    source text,
+    source_created_at timestamptz
+  )
+  returning *;
+end;
+$$;
+
+revoke all on function public.replace_group_restaurants(bigint, jsonb, text, text) from public, anon, authenticated;
+grant execute on function public.replace_group_restaurants(bigint, jsonb, text, text) to service_role;
+
 insert into public.groups (name, code)
 values ('默认吃饭群', 'default')
 on conflict (code) do nothing;
@@ -158,13 +241,9 @@ select seed.name, seed.category, g.id
 from public.groups g
 cross join (
   values
-    ('番茄鸡蛋盖浇饭', '主食'),
-    ('番茄牛腩面', '面食'),
-    ('酸辣土豆丝', '热菜'),
-    ('清炒西蓝花', '素菜'),
-    ('红烧排骨', '热菜'),
-    ('麻婆豆腐', '热菜'),
-    ('蛋炒饭', '主食')
+    ('大米先生', '中式快餐'),
+    ('乡村基', '中式快餐'),
+    ('麦当劳', '西式快餐')
 ) as seed(name, category)
 where g.code = 'default'
   and not exists (
