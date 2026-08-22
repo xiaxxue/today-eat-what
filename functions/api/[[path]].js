@@ -737,8 +737,17 @@ async function handleApi(request, env) {
     const foods = await db.list('foods', { select: 'id,imported_confirmed_count', id: `eq.${foodId}`, group_id: `eq.${group.id}`, limit: 1 });
     if (!foods[0]) throw new ApiError(404, '群里没有这个餐厅');
     await db.upsert('food_ratings', { food_id: foodId, member_id: member.id, score, updated_at: new Date().toISOString() }, 'food_id,member_id');
-    const updated = (await foodRowsForGroup(db, group.id, member.id)).find((item) => item.id === foodId);
-    return json({ ok: true, food: updated, member });
+    const ratings = await db.list('food_ratings', { select: 'member_id,score', food_id: `eq.${foodId}`, limit: 10000 });
+    const total = ratings.reduce((sum, item) => sum + Number(item.score), 0);
+    return json({
+      ok: true,
+      food: {
+        id: foodId,
+        rating: ratings.length ? Math.round((total / ratings.length) * 10) / 10 : 0,
+        rating_count: new Set(ratings.map((item) => Number(item.member_id))).size,
+        my_rating: score,
+      },
+    });
   }
 
   const visits = pathname.match(/^\/api\/foods\/(\d+)\/visits$/);
@@ -750,8 +759,7 @@ async function handleApi(request, env) {
     const foods = await db.list('foods', { select: 'id', id: `eq.${foodId}`, group_id: `eq.${group.id}`, limit: 1 });
     if (!foods[0]) throw new ApiError(404, '群里没有这个餐厅');
     await db.insert('food_visits', { food_id: foodId, member_id: member.id });
-    const updated = (await foodRowsForGroup(db, group.id, member.id)).find((item) => item.id === foodId);
-    return json({ ok: true, food: updated, member }, 201);
+    return json({ ok: true, food: { id: foodId } }, 201);
   }
   if (visits && method === 'DELETE') {
     const foodId = positiveId(visits[1]);
@@ -771,8 +779,7 @@ async function handleApi(request, env) {
         updated_at: new Date().toISOString(),
       });
     } else throw new ApiError(409, '没有可撤销的到访记录');
-    const updated = (await foodRowsForGroup(db, group.id, member.id)).find((item) => item.id === foodId);
-    return json({ ok: true, food: updated, member });
+    return json({ ok: true, food: { id: foodId } });
   }
 
   const deleteFood = pathname.match(/^\/api\/foods\/(\d+)$/);
