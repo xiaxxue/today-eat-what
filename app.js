@@ -32,7 +32,7 @@ locationField.className = 'restaurant-field full';
 locationField.innerHTML = '<label for="locationInput">地点 / 商圈</label><input class="input" id="locationInput" maxlength="50" placeholder="如：西溪银泰、龙湖天街" />';
 $('catInput').closest('.restaurant-field').before(locationField);
 const els = {
-  authGate: $('authGate'), authName: $('authName'), authEmail: $('authEmail'), authPassword: $('authPassword'),
+  authGate: $('authGate'), authUsername: $('authUsername'), authPassword: $('authPassword'),
   authSubmit: $('authSubmit'), authStatus: $('authStatus'), loginTab: $('loginTab'), signupTab: $('signupTab'),
   accountBtn: $('accountBtn'), accountBackdrop: $('accountBackdrop'), accountName: $('accountName'), accountEmail: $('accountEmail'),
   accountStatus: $('accountStatus'), groupOpenBtn: $('groupOpenBtn'), groupBackdrop: $('groupBackdrop'), groupList: $('groupList'),
@@ -119,7 +119,7 @@ function currentGroup() {
 function updateAccountUI() {
   if (!currentUser) return;
   els.accountName.textContent = currentUser.display_name || '吃饭搭子';
-  els.accountEmail.textContent = currentUser.email || (IS_LOCAL ? '本机演示模式' : '');
+  els.accountEmail.textContent = currentUser.username ? `@${currentUser.username}` : (currentUser.email || (IS_LOCAL ? '本机演示模式' : ''));
   els.accountBtn.textContent = (currentUser.display_name || '我').slice(0, 1).toUpperCase();
 }
 
@@ -128,8 +128,8 @@ function switchAuth(mode) {
   const signingUp = mode === 'signup';
   els.loginTab.classList.toggle('active', !signingUp);
   els.signupTab.classList.toggle('active', signingUp);
-  els.authName.style.display = signingUp ? 'block' : 'none';
-  els.authName.required = signingUp;
+  els.authUsername.placeholder = signingUp ? '用户名（2-24 位）' : '用户名（旧账号也可输入邮箱）';
+  els.authUsername.maxLength = signingUp ? 24 : 50;
   els.authPassword.autocomplete = signingUp ? 'new-password' : 'current-password';
   els.authSubmit.textContent = signingUp ? '注册并登录' : '登录';
   setStatus(els.authStatus, '');
@@ -140,20 +140,6 @@ function showAuthGate(message = '') {
   els.authGate.classList.remove('hidden');
   switchAuth('login');
   if (message) setStatus(els.authStatus, message, 'warn');
-}
-
-async function adoptHashSession() {
-  if (!location.hash.includes('access_token=')) return null;
-  const params = new URLSearchParams(location.hash.slice(1));
-  const accessToken = params.get('access_token');
-  const refreshToken = params.get('refresh_token');
-  if (!accessToken || !refreshToken) return null;
-  const data = await authCall('/api/auth/adopt-session', {
-    method: 'POST',
-    body: JSON.stringify({ accessToken, refreshToken, expiresIn: Number(params.get('expires_in')) || 3600 }),
-  });
-  history.replaceState(null, '', `${location.pathname}${location.search}`);
-  return data;
 }
 
 async function finishLogin(user) {
@@ -179,15 +165,6 @@ async function initializeAuth() {
     return;
   }
   try {
-    const adopted = await adoptHashSession();
-    if (adopted?.user) {
-      await finishLogin(adopted.user);
-      return;
-    }
-  } catch (error) {
-    setStatus(els.authStatus, error.message, 'fail');
-  }
-  try {
     const data = await authCall('/api/auth/session');
     await finishLogin(data.user);
   } catch {
@@ -202,22 +179,15 @@ async function initializeAuth() {
 
 async function submitAuth(event) {
   event.preventDefault();
-  const email = els.authEmail.value.trim();
+  const username = els.authUsername.value.trim();
   const password = els.authPassword.value;
-  const displayName = els.authName.value.trim();
   els.authSubmit.disabled = true;
   setStatus(els.authStatus, authMode === 'signup' ? '正在创建账号…' : '正在登录…');
   try {
     const data = await authCall(authMode === 'signup' ? '/api/auth/signup' : '/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password, ...(authMode === 'signup' ? { displayName } : {}) }),
+      body: JSON.stringify({ username, password }),
     });
-    if (data.needs_confirmation) {
-      switchAuth('login');
-      els.authEmail.value = email;
-      setStatus(els.authStatus, '注册成功，请先打开验证邮件，再回来登录。', 'ok');
-      return;
-    }
     await finishLogin(data.user);
   } catch (error) {
     setStatus(els.authStatus, error.message, 'fail');

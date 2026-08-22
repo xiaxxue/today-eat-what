@@ -136,6 +136,46 @@ async function authRequest(env, path, options = {}) {
   return payload;
 }
 
+async function adminAuthRequest(env, path, options = {}) {
+  const { baseUrl, secretKey } = getSupabaseConfig(env);
+  if (!baseUrl || !secretKey) throw new ApiError(503, 'Supabase 管理账号未配置');
+  const response = await fetch(`${baseUrl}/auth/v1${path}`, {
+    ...options,
+    headers: {
+      apikey: secretKey,
+      Authorization: `Bearer ${secretKey}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+  });
+  const text = await response.text();
+  let payload = null;
+  if (text) {
+    try { payload = JSON.parse(text); } catch { payload = text; }
+  }
+  if (!response.ok) {
+    const message = payload && typeof payload === 'object'
+      ? payload.msg || payload.message || payload.error_description || payload.error || '创建账号失败'
+      : '创建账号失败';
+    throw new ApiError(response.status, message, payload);
+  }
+  return payload;
+}
+
+function normalizeUsername(value) {
+  const username = typeof value === 'string' ? value.normalize('NFKC').trim() : '';
+  if (!/^[\p{L}\p{N}_-]{2,24}$/u.test(username)) return '';
+  return username;
+}
+
+async function usernameEmail(username) {
+  const canonical = username.normalize('NFKC').toLocaleLowerCase('en-US');
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+  const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex}@users.today-eat-what.invalid`;
+}
+
 function parseCookies(request) {
   const result = {};
   const raw = request.headers.get('Cookie') || '';
@@ -184,10 +224,16 @@ function publicUser(user) {
   const displayName = typeof user.user_metadata?.display_name === 'string'
     ? user.user_metadata.display_name.trim()
     : '';
+  const username = typeof user.user_metadata?.username === 'string'
+    ? user.user_metadata.username.trim()
+    : '';
+  const email = String(user.email || '');
+  const internalEmail = email.endsWith('@users.today-eat-what.invalid');
   return {
     id: user.id,
-    email: user.email || '',
-    display_name: displayName || String(user.email || '吃饭搭子').split('@')[0],
+    email: internalEmail ? '' : email,
+    username,
+    display_name: displayName || username || email.split('@')[0] || '吃饭搭子',
   };
 }
 
@@ -478,26 +524,50 @@ async function listMembers(db, groupId) {
 async function handleAuth(request, env, pathname, method) {
   if (pathname === '/api/auth/signup' && method === 'POST') {
     const body = await readBody(request);
-    const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const username = normalizeUsername(body?.username);
     const password = typeof body?.password === 'string' ? body.password : '';
-    const displayName = typeof body?.displayName === 'string' ? body.displayName.trim() : '';
-    if (!email || !/^\S+@\S+\.\S+$/.test(email)) throw new ApiError(400, '请输入有效邮箱');
+    if (!username) throw new ApiError(400, '用户名需为 2-24 位中文、字母、数字、_ 或 -');
     if (password.length < 8) throw new ApiError(400, '密码至少需要 8 位');
-    if (!displayName || displayName.length > 30) throw new ApiError(400, '昵称需要 1-30 个字符');
-    const redirectTo = new URL(request.url).origin;
-    const data = await authRequest(env, `/signup?redirect_to=${encodeURIComponent(redirectTo)}`, {
-      method: 'POST',
-      body: JSON.stringify({ email, password, data: { display_name: displayName } }),
-    });
-    const session = data.session || (data.access_token ? data : null);
-    return json({ ok: true, user: publicUser(data.user || session?.user), needs_confirmation: !session }, 201, sessionCookies(session, request));
+    const email = await usernameEmail(username);
+    let created = true;
+    try {
+      await adminAuthRequest(env, '/admin/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          email,
+          password,
+          email_confirm: true,
+          user_metadata: { username, display_name: username },
+        }),
+      });
+    } catch (error) {
+      const duplicate = error instanceof ApiError
+        && (error.status === 409 || error.status === 422 || /already|registered|exists/i.test(error.message));
+      if (duplicate) created = false;
+      else throw error;
+    }
+    let session;
+    try {
+      session = await authRequest(env, '/token?grant_type=password', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      });
+    } catch (error) {
+      if (!created) throw new ApiError(409, '这个用户名已经被使用，请直接登录');
+      throw error;
+    }
+    return json({ ok: true, user: publicUser(session.user) }, created ? 201 : 200, sessionCookies(session, request));
   }
 
   if (pathname === '/api/auth/login' && method === 'POST') {
     const body = await readBody(request);
-    const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const identifier = typeof body?.username === 'string' ? body.username.normalize('NFKC').trim() : '';
     const password = typeof body?.password === 'string' ? body.password : '';
-    if (!email || !password) throw new ApiError(400, '请输入邮箱和密码');
+    if (!identifier || !password) throw new ApiError(400, '请输入用户名和密码');
+    const legacyEmail = /^\S+@\S+\.\S+$/.test(identifier) ? identifier.toLowerCase() : '';
+    const username = legacyEmail ? '' : normalizeUsername(identifier);
+    if (!legacyEmail && !username) throw new ApiError(400, '用户名需为 2-24 位中文、字母、数字、_ 或 -');
+    const email = legacyEmail || await usernameEmail(username);
     const session = await authRequest(env, '/token?grant_type=password', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
@@ -508,17 +578,6 @@ async function handleAuth(request, env, pathname, method) {
   if (pathname === '/api/auth/refresh' && method === 'POST') {
     const refreshToken = parseCookies(request)[REFRESH_COOKIE];
     if (!refreshToken) throw new ApiError(401, '登录已过期');
-    const session = await authRequest(env, '/token?grant_type=refresh_token', {
-      method: 'POST',
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
-    return json({ ok: true, user: publicUser(session.user) }, 200, sessionCookies(session, request));
-  }
-
-  if (pathname === '/api/auth/adopt-session' && method === 'POST') {
-    const body = await readBody(request);
-    const refreshToken = typeof body?.refreshToken === 'string' ? body.refreshToken : '';
-    if (!refreshToken) throw new ApiError(400, '验证链接无效');
     const session = await authRequest(env, '/token?grant_type=refresh_token', {
       method: 'POST',
       body: JSON.stringify({ refresh_token: refreshToken }),
