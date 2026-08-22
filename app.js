@@ -19,6 +19,7 @@ let renameGroupId = null;
 let selectedFoodId = null;
 let selectedFoodConfirmed = false;
 let editingFoodId = null;
+const pendingFoodMutations = new Set();
 
 const memberToken = IS_LOCAL ? 'local-owner' : (localStorage.getItem(MEMBER_TOKEN_KEY)
   || (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `member-${Date.now()}-${Math.random().toString(16).slice(2)}`));
@@ -387,8 +388,9 @@ function renderFoods() {
     const tags = Array.isArray(food.tags) ? food.tags : [];
     const locationLabel = restaurantLocationLabel(food);
     const featured = rating >= 4 || visits >= 2;
+    const pending = pendingFoodMutations.has(foodMutationKey(currentGroupId, food.id));
     const meta = [`📁 ${esc(food.category || '未分类')}`, price, distance].filter(Boolean).join('　');
-    return `<article class="restaurant-card ${food.enabled === false ? 'disabled' : ''}"><div class="r-top"><div><div class="restaurant-name">${esc(food.name)} ${locationLabel ? `<span class="tag location-tag">📍 ${esc(locationLabel)}</span>` : ''}${featured ? '<span class="tag featured">群精选</span>' : ''}${food.enabled === false ? '<span class="tag">已停用</span>' : ''}</div><div class="meta">${meta}</div>${tags.map((tag) => `<span class="tag">${esc(tag)}</span>`).join('')}</div><div class="r-actions"><button class="select-btn" data-pick="${food.id}" ${food.enabled === false ? 'disabled' : ''}>选这家</button><details class="card-menu"><summary aria-label="${esc(food.name)}更多操作">···</summary><div class="card-menu-popover"><button data-edit="${food.id}">编辑餐厅</button><button class="danger" data-del="${food.id}">删除餐厅</button></div></details></div></div><div class="rating-row"><div class="stars" aria-label="给${esc(food.name)}评分">${[1, 2, 3, 4, 5].map((score) => `<button class="star ${score <= myRating ? 'selected' : ''}" data-rate="${food.id}" data-score="${score}" aria-label="${score}星">★</button>`).join('')}</div><span class="rating-copy">我的评分 ${myRating ? `${myRating} 星` : '未评分'}</span></div><div class="card-foot"><span class="rating-copy">⭐ ${rating ? rating.toFixed(1) : '暂无'} · ${ratings} 人评分</span><div class="visit-action"><span>我去过</span><div class="visit-stepper"><button data-visit-minus="${food.id}" aria-label="撤销${esc(food.name)}的一次到访" ${myVisits === 0 ? 'disabled' : ''}>−</button><strong>${myVisits}</strong><button data-visit-plus="${food.id}" aria-label="记录${esc(food.name)}的一次到访">＋</button></div><span>次</span></div></div></article>`;
+    return `<article class="restaurant-card ${food.enabled === false ? 'disabled' : ''}" aria-busy="${pending}"><div class="r-top"><div><div class="restaurant-name">${esc(food.name)} ${locationLabel ? `<span class="tag location-tag">📍 ${esc(locationLabel)}</span>` : ''}${featured ? '<span class="tag featured">群精选</span>' : ''}${food.enabled === false ? '<span class="tag">已停用</span>' : ''}</div><div class="meta">${meta}</div>${tags.map((tag) => `<span class="tag">${esc(tag)}</span>`).join('')}</div><div class="r-actions"><button class="select-btn" data-pick="${food.id}" ${food.enabled === false ? 'disabled' : ''}>选这家</button><details class="card-menu"><summary aria-label="${esc(food.name)}更多操作">···</summary><div class="card-menu-popover"><button data-edit="${food.id}" ${pending ? 'disabled' : ''}>编辑餐厅</button><button class="danger" data-del="${food.id}" ${pending ? 'disabled' : ''}>删除餐厅</button></div></details></div></div><div class="rating-row"><div class="stars" aria-label="给${esc(food.name)}评分">${[1, 2, 3, 4, 5].map((score) => `<button class="star ${score <= myRating ? 'selected' : ''}" data-rate="${food.id}" data-score="${score}" aria-label="${score}星" ${pending ? 'disabled' : ''}>★</button>`).join('')}</div><span class="rating-copy">我的评分 ${myRating ? `${myRating} 星` : '未评分'}</span></div><div class="card-foot"><span class="rating-copy">⭐ ${rating ? rating.toFixed(1) : '暂无'} · ${ratings} 人评分</span><div class="visit-action"><span>我去过</span><div class="visit-stepper"><button data-visit-minus="${food.id}" aria-label="撤销${esc(food.name)}的一次到访" ${myVisits === 0 || pending ? 'disabled' : ''}>−</button><strong>${myVisits}</strong><button data-visit-plus="${food.id}" aria-label="记录${esc(food.name)}的一次到访" ${pending ? 'disabled' : ''}>＋</button></div><span>次</span></div></div></article>`;
   }).join('') : `<div class="empty">${keyword || selectedCategory ? '没有找到匹配的餐厅' : '还没有餐厅，先添加一个吧～'}</div>`;
   els.listWrap.querySelectorAll('[data-pick]').forEach((button) => { button.onclick = () => selectFood(Number(button.dataset.pick)); });
   els.listWrap.querySelectorAll('[data-edit]').forEach((button) => { button.onclick = () => startEditFood(Number(button.dataset.edit)); });
@@ -396,6 +398,45 @@ function renderFoods() {
   els.listWrap.querySelectorAll('[data-rate]').forEach((button) => { button.onclick = () => rateFood(Number(button.dataset.rate), Number(button.dataset.score)); });
   els.listWrap.querySelectorAll('[data-visit-plus]').forEach((button) => { button.onclick = () => recordVisit(Number(button.dataset.visitPlus)); });
   els.listWrap.querySelectorAll('[data-visit-minus]').forEach((button) => { button.onclick = () => undoVisit(Number(button.dataset.visitMinus)); });
+}
+
+function foodMutationKey(groupId, foodId) {
+  return `${Number(groupId)}:${Number(foodId)}`;
+}
+
+function beginFoodMutation(id) {
+  const groupId = currentGroupId;
+  const index = foods.findIndex((item) => Number(item.id) === Number(id));
+  const key = foodMutationKey(groupId, id);
+  if (!groupId || index < 0 || pendingFoodMutations.has(key)) return null;
+  pendingFoodMutations.add(key);
+  return { groupId, id: Number(id), index, key, before: { ...foods[index] } };
+}
+
+function mutationFood(mutation) {
+  if (!mutation || currentGroupId !== mutation.groupId) return null;
+  return foods.find((item) => Number(item.id) === mutation.id) || null;
+}
+
+function applyFoodUpdate(mutation, update) {
+  const food = mutationFood(mutation);
+  if (!food || !update || typeof update !== 'object') return;
+  Object.assign(food, update, { id: mutation.id });
+}
+
+function rollbackFoodMutation(mutation) {
+  if (!mutation || currentGroupId !== mutation.groupId) return;
+  const index = foods.findIndex((item) => Number(item.id) === mutation.id);
+  if (index >= 0) foods[index] = mutation.before;
+  else foods.splice(Math.min(mutation.index, foods.length), 0, mutation.before);
+}
+
+function finishFoodMutation(mutation) {
+  if (!mutation) return;
+  pendingFoodMutations.delete(mutation.key);
+  if (currentGroupId !== mutation.groupId) return;
+  renderFoods();
+  updateStats();
 }
 
 function formatDistance(distanceM) {
@@ -415,27 +456,68 @@ function restaurantLocationLabel(food) {
 }
 
 async function rateFood(id, score) {
+  const mutation = beginFoodMutation(id);
+  if (!mutation) return;
+  const food = mutationFood(mutation);
+  const previousScore = Number(food.my_rating) || 0;
+  const previousCount = Number(food.rating_count) || 0;
+  const nextCount = previousScore ? previousCount : previousCount + 1;
+  const nextTotal = (Number(food.rating) || 0) * previousCount - previousScore + score;
+  Object.assign(food, {
+    my_rating: score,
+    rating_count: nextCount,
+    rating: nextCount ? Math.round((nextTotal / nextCount) * 10) / 10 : 0,
+  });
+  renderFoods();
+  updateStats();
   try {
-    await api(`/api/foods/${id}/rating`, { method: 'POST', body: JSON.stringify(memberPayload({ score })) });
-    await Promise.all([loadFoods(), loadMembers()]);
-    setStatus(els.importStatus, `已提交 ${score} 星评分，群友都能看到`, 'ok');
-  } catch (error) { setStatus(els.importStatus, error.message || '评分失败，请重试', 'fail'); }
+    const data = await api(`/api/foods/${id}/rating`, { method: 'POST', body: JSON.stringify(memberPayload({ score })) });
+    applyFoodUpdate(mutation, data.food);
+    if (currentGroupId === mutation.groupId) setStatus(els.importStatus, `已提交 ${score} 星评分，群友都能看到`, 'ok');
+  } catch (error) {
+    rollbackFoodMutation(mutation);
+    if (currentGroupId === mutation.groupId) setStatus(els.importStatus, error.message || '评分失败，请重试', 'fail');
+  } finally { finishFoodMutation(mutation); }
 }
 
 async function recordVisit(id) {
+  const mutation = beginFoodMutation(id);
+  if (!mutation) return;
+  const food = mutationFood(mutation);
+  food.visit_count = (Number(food.visit_count) || 0) + 1;
+  food.my_visit_count = (Number(food.my_visit_count) || 0) + 1;
+  renderFoods();
+  updateStats();
   try {
-    await api(`/api/foods/${id}/visits`, { method: 'POST', body: JSON.stringify(memberPayload()) });
-    await Promise.all([loadFoods(), loadMembers()]);
-    setStatus(els.importStatus, '已记录去过一次，群组到访次数已更新', 'ok');
-  } catch (error) { setStatus(els.importStatus, error.message || '记录到访失败，请重试', 'fail'); }
+    const data = await api(`/api/foods/${id}/visits`, { method: 'POST', body: JSON.stringify(memberPayload()) });
+    applyFoodUpdate(mutation, data.food);
+    if (currentGroupId === mutation.groupId) setStatus(els.importStatus, '已记录去过一次，群组到访次数已更新', 'ok');
+  } catch (error) {
+    rollbackFoodMutation(mutation);
+    if (currentGroupId === mutation.groupId) setStatus(els.importStatus, error.message || '记录到访失败，请重试', 'fail');
+  } finally { finishFoodMutation(mutation); }
 }
 
 async function undoVisit(id) {
+  const mutation = beginFoodMutation(id);
+  if (!mutation) return;
+  const food = mutationFood(mutation);
+  if ((Number(food.my_visit_count) || 0) <= 0) {
+    finishFoodMutation(mutation);
+    return;
+  }
+  food.visit_count = Math.max(0, (Number(food.visit_count) || 0) - 1);
+  food.my_visit_count = Math.max(0, (Number(food.my_visit_count) || 0) - 1);
+  renderFoods();
+  updateStats();
   try {
-    await api(`/api/foods/${id}/visits`, { method: 'DELETE' });
-    await Promise.all([loadFoods(), loadMembers()]);
-    setStatus(els.importStatus, '已撤销一次到访记录', 'ok');
-  } catch (error) { setStatus(els.importStatus, error.message || '撤销到访失败，请重试', 'fail'); }
+    const data = await api(`/api/foods/${id}/visits`, { method: 'DELETE' });
+    applyFoodUpdate(mutation, data.food);
+    if (currentGroupId === mutation.groupId) setStatus(els.importStatus, '已撤销一次到访记录', 'ok');
+  } catch (error) {
+    rollbackFoodMutation(mutation);
+    if (currentGroupId === mutation.groupId) setStatus(els.importStatus, error.message || '撤销到访失败，请重试', 'fail');
+  } finally { finishFoodMutation(mutation); }
 }
 
 function localGroupHistory() {
@@ -646,13 +728,20 @@ async function addFood() {
 async function deleteFood(id) {
   const food = foods.find((item) => Number(item.id) === Number(id));
   if (!food || !globalThis.confirm(`确定删除「${food.name}」吗？\n评分和去过记录也会一起删除。`)) return;
+  const mutation = beginFoodMutation(id);
+  if (!mutation) return;
+  foods.splice(mutation.index, 1);
+  renderFoods();
+  updateStats();
   try {
     await api(`/api/foods/${id}`, { method: 'DELETE' });
     if (Number(editingFoodId) === Number(id)) closeFoodForm();
-    await loadFoods();
-    setStatus(els.importStatus, `已删除「${food.name}」`, 'ok');
+    if (currentGroupId === mutation.groupId) setStatus(els.importStatus, `已删除「${food.name}」`, 'ok');
   }
-  catch (error) { setStatus(els.importStatus, error.message || '删除失败', 'fail'); }
+  catch (error) {
+    rollbackFoodMutation(mutation);
+    if (currentGroupId === mutation.groupId) setStatus(els.importStatus, error.message || '删除失败', 'fail');
+  } finally { finishFoodMutation(mutation); }
 }
 
 function parseCSV(text) {
