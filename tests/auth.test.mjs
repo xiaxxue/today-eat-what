@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { afterEach, before, test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 
@@ -42,22 +43,23 @@ test('protected routes reject requests without an authenticated cookie', async (
 });
 
 test('login keeps Supabase tokens out of JSON and writes HttpOnly secure cookies', async () => {
+  const internalEmail = `${createHash('sha256').update('小夏').digest('hex')}@users.today-eat-what.invalid`;
   globalThis.fetch = async (url, init) => {
     assert.equal(String(url), 'https://demo.supabase.co/auth/v1/token?grant_type=password');
     assert.equal(init.headers.apikey, env.SUPABASE_PUBLISHABLE_KEY);
-    assert.deepEqual(JSON.parse(init.body), { email: 'alice@example.com', password: 'password123' });
+    assert.deepEqual(JSON.parse(init.body), { email: internalEmail, password: 'password123' });
     return Response.json({
       access_token: 'access-token',
       refresh_token: 'refresh-token',
       expires_in: 3600,
-      user: { id: 'user-a', email: 'alice@example.com', user_metadata: { display_name: 'Alice' } },
+      user: { id: 'user-a', email: internalEmail, user_metadata: { username: '小夏', display_name: '小夏' } },
     });
   };
 
   const response = await onRequest({
     request: request('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email: 'Alice@Example.com', password: 'password123' }),
+      body: JSON.stringify({ username: '小夏', password: 'password123' }),
     }),
     env,
   });
@@ -65,7 +67,7 @@ test('login keeps Supabase tokens out of JSON and writes HttpOnly secure cookies
   assert.equal(response.status, 200);
   assert.deepEqual(await body(response), {
     ok: true,
-    user: { id: 'user-a', email: 'alice@example.com', display_name: 'Alice' },
+    user: { id: 'user-a', email: '', username: '小夏', display_name: '小夏' },
   });
   const cookieHeader = response.headers.get('set-cookie') || '';
   assert.match(cookieHeader, /wte_access_token=access-token/);
@@ -80,36 +82,111 @@ test('invalid login input is rejected before any upstream request', async () => 
     throw new Error('network should not be called');
   };
   const response = await onRequest({
-    request: request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: '', password: '' }) }),
+    request: request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username: '', password: '' }) }),
     env,
   });
   assert.equal(response.status, 400);
-  assert.deepEqual(await body(response), { ok: false, msg: '请输入邮箱和密码' });
+  assert.deepEqual(await body(response), { ok: false, msg: '请输入用户名和密码' });
 });
 
-test('email confirmation adoption exchanges the refresh token for a verified session', async () => {
+test('signup creates a confirmed user with the secret key and immediately signs in', async () => {
+  const internalEmail = `${createHash('sha256').update('alice').digest('hex')}@users.today-eat-what.invalid`;
+  let call = 0;
   globalThis.fetch = async (url, init) => {
-    assert.equal(String(url), 'https://demo.supabase.co/auth/v1/token?grant_type=refresh_token');
-    assert.deepEqual(JSON.parse(init.body), { refresh_token: 'confirmation-refresh' });
+    call += 1;
+    if (call === 1) {
+      assert.equal(String(url), 'https://demo.supabase.co/auth/v1/admin/users');
+      assert.equal(init.headers.apikey, env.SUPABASE_SECRET_KEY);
+      assert.equal(init.headers.Authorization, `Bearer ${env.SUPABASE_SECRET_KEY}`);
+      assert.deepEqual(JSON.parse(init.body), {
+        email: internalEmail,
+        password: 'password123',
+        email_confirm: true,
+        user_metadata: { username: 'Alice', display_name: 'Alice' },
+      });
+      return Response.json({ id: 'new-user', email: internalEmail });
+    }
+    assert.equal(String(url), 'https://demo.supabase.co/auth/v1/token?grant_type=password');
+    assert.equal(init.headers.apikey, env.SUPABASE_PUBLISHABLE_KEY);
+    assert.deepEqual(JSON.parse(init.body), { email: internalEmail, password: 'password123' });
     return Response.json({
-      access_token: 'verified-access',
-      refresh_token: 'rotated-refresh',
+      access_token: 'new-access',
+      refresh_token: 'new-refresh',
       expires_in: 3600,
-      user: { id: 'verified-user', email: 'verified@example.com', user_metadata: {} },
+      user: { id: 'new-user', email: internalEmail, user_metadata: { username: 'Alice', display_name: 'Alice' } },
     });
   };
   const response = await onRequest({
-    request: request('/api/auth/adopt-session', {
+    request: request('/api/auth/signup', {
       method: 'POST',
-      body: JSON.stringify({ accessToken: 'untrusted-access', refreshToken: 'confirmation-refresh' }),
+      body: JSON.stringify({ username: 'Alice', password: 'password123' }),
+    }),
+    env,
+  });
+  assert.equal(response.status, 201);
+  assert.deepEqual(await body(response), {
+    ok: true,
+    user: { id: 'new-user', email: '', username: 'Alice', display_name: 'Alice' },
+  });
+  const cookieHeader = response.headers.get('set-cookie') || '';
+  assert.match(cookieHeader, /wte_access_token=new-access/);
+  assert.match(cookieHeader, /wte_refresh_token=new-refresh/);
+  assert.equal(call, 2);
+});
+
+test('retrying signup after a partial failure signs in the already-created user', async () => {
+  const internalEmail = `${createHash('sha256').update('alice').digest('hex')}@users.today-eat-what.invalid`;
+  let call = 0;
+  globalThis.fetch = async (url, init) => {
+    call += 1;
+    if (call === 1) {
+      assert.equal(String(url), 'https://demo.supabase.co/auth/v1/admin/users');
+      return Response.json({ message: 'A user with this email address has already been registered' }, { status: 422 });
+    }
+    assert.equal(String(url), 'https://demo.supabase.co/auth/v1/token?grant_type=password');
+    assert.deepEqual(JSON.parse(init.body), { email: internalEmail, password: 'password123' });
+    return Response.json({
+      access_token: 'recovered-access',
+      refresh_token: 'recovered-refresh',
+      expires_in: 3600,
+      user: { id: 'new-user', email: internalEmail, user_metadata: { username: 'Alice', display_name: 'Alice' } },
+    });
+  };
+  const response = await onRequest({
+    request: request('/api/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'Alice', password: 'password123' }),
     }),
     env,
   });
   assert.equal(response.status, 200);
-  const cookieHeader = response.headers.get('set-cookie') || '';
-  assert.match(cookieHeader, /wte_access_token=verified-access/);
-  assert.match(cookieHeader, /wte_refresh_token=rotated-refresh/);
-  assert.doesNotMatch(cookieHeader, /untrusted-access/);
+  assert.equal((await body(response)).user.username, 'Alice');
+  assert.equal(call, 2);
+});
+
+test('legacy email accounts can still sign in during migration', async () => {
+  globalThis.fetch = async (url, init) => {
+    assert.equal(String(url), 'https://demo.supabase.co/auth/v1/token?grant_type=password');
+    assert.deepEqual(JSON.parse(init.body), { email: 'alice@example.com', password: 'password123' });
+    return Response.json({
+      access_token: 'legacy-access',
+      refresh_token: 'legacy-refresh',
+      expires_in: 3600,
+      user: { id: 'legacy-user', email: 'alice@example.com', user_metadata: { display_name: 'Alice' } },
+    });
+  };
+  const response = await onRequest({
+    request: request('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: 'Alice@Example.com', password: 'password123' }),
+    }),
+    env,
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await body(response), {
+    ok: true,
+    user: { id: 'legacy-user', email: 'alice@example.com', username: '', display_name: 'Alice' },
+  });
 });
 
 test('a signed-in user cannot read members of a group they did not join', async () => {

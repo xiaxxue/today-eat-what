@@ -33,7 +33,7 @@ npm start
 
 ## 四、账号与群组说明
 
-- 线上版本使用 Supabase Auth 邮箱密码登录，登录态保存在 HttpOnly Cookie 中。
+- 线上版本使用“用户名 + 密码”登录；注册时由服务端创建已确认的 Supabase Auth 账号并直接建立登录态，令牌保存在 HttpOnly Cookie 中。
 - 新账号首次登录会自动创建一套独立的「我的吃饭群」和示例餐厅。
 - 你可以在页面里创建新群，设置群名和可选群码。
 - 每个群有独立餐厅列表、成员、评分和到访记录，所有设备共享同一套后端数据库。
@@ -101,16 +101,11 @@ SUPABASE_SERVICE_ROLE_KEY=你的 service_role key
 
 `SUPABASE_SECRET_KEY` 和 `SUPABASE_SERVICE_ROLE_KEY` 必须保存为 Secret，不能放进前端、GitHub 或普通环境变量。`SUPABASE_URL` 与 `SUPABASE_PUBLISHABLE_KEY` 是普通 Text 变量。
 
-### 4. 配置 Supabase Auth 地址
+### 4. Supabase Auth 登录方式
 
-在 Supabase `Authentication > URL Configuration` 中设置：
+新用户只需要填写 2-24 位用户名和至少 8 位密码。Pages Function 使用 Secret Key 在服务端创建已确认账号，随后立即登录；Secret Key 不会发送到浏览器。上线前请确认 `SUPABASE_SECRET_KEY` 仍配置为 Cloudflare Secret。
 
-```text
-Site URL: https://你的-pages-域名.pages.dev
-Redirect URLs: https://你的-pages-域名.pages.dev/**
-```
-
-邮箱确认开启时，注册用户需要点击验证邮件；验证链接返回页面后，前端会把 Supabase 会话换成安全的 HttpOnly Cookie。
+历史邮箱账号仍可在用户名输入框填写原邮箱登录，便于平滑迁移。当前版本没有邮件找回密码功能。
 
 ### 5. 部署验证
 
