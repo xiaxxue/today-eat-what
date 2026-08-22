@@ -26,7 +26,7 @@ npm start
 - `server.js`：Node 后端（使用 `node:sqlite` 持久化）
 - `index.html`：前端页面结构和样式
 - `app.js`：账号登录、群组和餐厅交互
-- `foods.db`：运行时自动创建的 SQLite 文件（首次启动时自动建库并塞入默认菜品）
+- `foods.db`：运行时自动创建的 SQLite 文件（首次启动时自动建库并加入示例餐厅）
 - `functions/api/[[path]].js`：Cloudflare Pages Functions 后端 API
 - `supabase/schema.sql`：Supabase 建表、索引、RLS 和初始数据
 - `build-static.js`：生成 Cloudflare Pages 的 `dist/` 静态目录

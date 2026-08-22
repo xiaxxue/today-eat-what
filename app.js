@@ -16,14 +16,21 @@ let isPicking = false;
 let groupMenuId = null;
 let groupMenuPlacement = null;
 let renameGroupId = null;
+let selectedFoodId = null;
+let selectedFoodConfirmed = false;
+let editingFoodId = null;
 
-const memberToken = localStorage.getItem(MEMBER_TOKEN_KEY)
-  || (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `member-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+const memberToken = IS_LOCAL ? 'local-owner' : (localStorage.getItem(MEMBER_TOKEN_KEY)
+  || (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `member-${Date.now()}-${Math.random().toString(16).slice(2)}`));
 localStorage.setItem(MEMBER_TOKEN_KEY, memberToken);
-const memberName = localStorage.getItem(MEMBER_NAME_KEY) || `搭子${memberToken.replace(/-/g, '').slice(-4)}`;
+const memberName = IS_LOCAL ? '我' : (localStorage.getItem(MEMBER_NAME_KEY) || `搭子${memberToken.replace(/-/g, '').slice(-4)}`);
 localStorage.setItem(MEMBER_NAME_KEY, memberName);
 
 const $ = (id) => document.getElementById(id);
+const locationField = document.createElement('div');
+locationField.className = 'restaurant-field full';
+locationField.innerHTML = '<label for="locationInput">地点 / 商圈</label><input class="input" id="locationInput" maxlength="50" placeholder="如：西溪银泰、龙湖天街" />';
+$('catInput').closest('.restaurant-field').before(locationField);
 const els = {
   authGate: $('authGate'), authName: $('authName'), authEmail: $('authEmail'), authPassword: $('authPassword'),
   authSubmit: $('authSubmit'), authStatus: $('authStatus'), loginTab: $('loginTab'), signupTab: $('signupTab'),
@@ -64,8 +71,19 @@ async function parseResponse(response) {
   return payload;
 }
 
+async function request(path, options = {}) {
+  try {
+    return await fetch(path, options);
+  } catch (error) {
+    if (IS_LOCAL) {
+      throw new Error('本地服务未启动，请先运行 npm start，再打开 http://localhost:3000');
+    }
+    throw error;
+  }
+}
+
 async function authCall(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await request(`${API_BASE}${path}`, {
     ...options,
     credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
@@ -74,7 +92,7 @@ async function authCall(path, options = {}) {
 }
 
 async function api(path, options = {}, canRefresh = true) {
-  const response = await fetch(queryUrl(path), {
+  const response = await request(queryUrl(path), {
     ...options,
     credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
@@ -153,7 +171,11 @@ async function finishLogin(user) {
 
 async function initializeAuth() {
   if (IS_LOCAL) {
-    await finishLogin({ display_name: memberName, email: '本机演示模式' });
+    try {
+      await finishLogin({ display_name: memberName, email: '本机演示模式' });
+    } catch (error) {
+      showAuthGate(error.message);
+    }
     return;
   }
   try {
@@ -269,6 +291,13 @@ async function setGroup(id, announce = true) {
   const target = groups.find((group) => group.id === Number(id));
   if (!target) return;
   currentGroupId = target.id;
+  selectedFoodId = null;
+  selectedFoodConfirmed = false;
+  isPicking = false;
+  els.result.textContent = '点击“随机一家”决定今天去哪家餐厅';
+  els.result.classList.remove('highlight');
+  els.countTip.textContent = '';
+  updatePickUI();
   groupMenuId = null;
   groupMenuPlacement = null;
   localStorage.setItem(GROUP_KEY, String(currentGroupId));
@@ -367,20 +396,52 @@ function renderFoods() {
   const categories = [...new Set(foods.map((food) => food.category || '未分类'))];
   els.category.innerHTML = '<option value="">全部类型</option>' + categories.map((category) => `<option value="${esc(category)}">${esc(category)}</option>`).join('');
   els.category.value = selectedCategory;
-  const rows = foods.filter((food) => (!keyword || food.name.toLowerCase().includes(keyword)) && (!selectedCategory || food.category === selectedCategory));
+  const rows = foods.filter((food) => {
+    const searchableText = [
+      food.name,
+      food.category,
+      ...(Array.isArray(food.tags) ? food.tags : []),
+      restaurantLocationLabel(food),
+    ].filter(Boolean).join(' ').toLowerCase();
+    return (!keyword || searchableText.includes(keyword)) && (!selectedCategory || food.category === selectedCategory);
+  });
   els.listLen.textContent = `(${foods.length})`;
   els.listWrap.innerHTML = rows.length ? rows.map((food) => {
     const rating = Number(food.rating) || 0;
     const ratings = Number(food.rating_count) || 0;
     const visits = Number(food.visit_count) || 0;
+    const myVisits = Number(food.my_visit_count) || 0;
     const myRating = Number(food.my_rating) || 0;
+    const price = food.avg_price_yuan !== null && food.avg_price_yuan !== undefined && Number.isFinite(Number(food.avg_price_yuan)) ? `💰 ¥${Number(food.avg_price_yuan)}` : '';
+    const distance = food.distance_m !== null && food.distance_m !== undefined && Number.isFinite(Number(food.distance_m)) ? `📍 ${formatDistance(Number(food.distance_m))}` : '';
+    const tags = Array.isArray(food.tags) ? food.tags : [];
+    const locationLabel = restaurantLocationLabel(food);
     const featured = rating >= 4 || visits >= 2;
-    return `<article class="restaurant-card"><div class="r-top"><div><div class="restaurant-name">${esc(food.name)} ${featured ? '<span class="tag featured">群精选</span>' : ''}</div><div class="meta">📁 ${esc(food.category || '未分类')}　⭐ ${rating ? rating.toFixed(1) : '暂无'}　👥 ${ratings} 人评分</div></div><div class="r-actions"><button class="outline-btn" data-pick="${food.id}">抽选</button><button class="danger-btn" data-del="${food.id}">删除</button></div></div><div class="rating-row"><div class="stars" aria-label="给${esc(food.name)}评分">${[1, 2, 3, 4, 5].map((score) => `<button class="star ${score <= myRating ? 'selected' : ''}" data-rate="${food.id}" data-score="${score}" aria-label="${score}星">★</button>`).join('')}</div><span class="rating-copy">我的评分 ${myRating ? `${myRating} 星` : '未评分'}</span></div><div class="card-foot"><span class="tag">${esc(food.category || '未分类')}</span><button class="visit-btn" data-visit="${food.id}">✓ 去过一次 · 共 ${visits} 次</button></div></article>`;
-  }).join('') : '<div class="empty">还没有餐厅，先添加一个吧～</div>';
-  els.listWrap.querySelectorAll('[data-pick]').forEach((button) => { button.onclick = () => pickOne(Number(button.dataset.pick)); });
+    const meta = [`📁 ${esc(food.category || '未分类')}`, price, distance].filter(Boolean).join('　');
+    return `<article class="restaurant-card ${food.enabled === false ? 'disabled' : ''}"><div class="r-top"><div><div class="restaurant-name">${esc(food.name)} ${locationLabel ? `<span class="tag location-tag">📍 ${esc(locationLabel)}</span>` : ''}${featured ? '<span class="tag featured">群精选</span>' : ''}${food.enabled === false ? '<span class="tag">已停用</span>' : ''}</div><div class="meta">${meta}</div>${tags.map((tag) => `<span class="tag">${esc(tag)}</span>`).join('')}</div><div class="r-actions"><button class="select-btn" data-pick="${food.id}" ${food.enabled === false ? 'disabled' : ''}>选这家</button><details class="card-menu"><summary aria-label="${esc(food.name)}更多操作">···</summary><div class="card-menu-popover"><button data-edit="${food.id}">编辑餐厅</button><button class="danger" data-del="${food.id}">删除餐厅</button></div></details></div></div><div class="rating-row"><div class="stars" aria-label="给${esc(food.name)}评分">${[1, 2, 3, 4, 5].map((score) => `<button class="star ${score <= myRating ? 'selected' : ''}" data-rate="${food.id}" data-score="${score}" aria-label="${score}星">★</button>`).join('')}</div><span class="rating-copy">我的评分 ${myRating ? `${myRating} 星` : '未评分'}</span></div><div class="card-foot"><span class="rating-copy">⭐ ${rating ? rating.toFixed(1) : '暂无'} · ${ratings} 人评分</span><div class="visit-action"><span>我去过</span><div class="visit-stepper"><button data-visit-minus="${food.id}" aria-label="撤销${esc(food.name)}的一次到访" ${myVisits === 0 ? 'disabled' : ''}>−</button><strong>${myVisits}</strong><button data-visit-plus="${food.id}" aria-label="记录${esc(food.name)}的一次到访">＋</button></div><span>次</span></div></div></article>`;
+  }).join('') : `<div class="empty">${keyword || selectedCategory ? '没有找到匹配的餐厅' : '还没有餐厅，先添加一个吧～'}</div>`;
+  els.listWrap.querySelectorAll('[data-pick]').forEach((button) => { button.onclick = () => selectFood(Number(button.dataset.pick)); });
+  els.listWrap.querySelectorAll('[data-edit]').forEach((button) => { button.onclick = () => startEditFood(Number(button.dataset.edit)); });
   els.listWrap.querySelectorAll('[data-del]').forEach((button) => { button.onclick = () => deleteFood(Number(button.dataset.del)); });
   els.listWrap.querySelectorAll('[data-rate]').forEach((button) => { button.onclick = () => rateFood(Number(button.dataset.rate), Number(button.dataset.score)); });
-  els.listWrap.querySelectorAll('[data-visit]').forEach((button) => { button.onclick = () => recordVisit(Number(button.dataset.visit)); });
+  els.listWrap.querySelectorAll('[data-visit-plus]').forEach((button) => { button.onclick = () => recordVisit(Number(button.dataset.visitPlus)); });
+  els.listWrap.querySelectorAll('[data-visit-minus]').forEach((button) => { button.onclick = () => undoVisit(Number(button.dataset.visitMinus)); });
+}
+
+function formatDistance(distanceM) {
+  return distanceM < 1000 ? `${distanceM}m` : `${(distanceM / 1000).toFixed(distanceM % 1000 === 0 ? 0 : 1)}km`;
+}
+
+function restaurantLocationLabel(food) {
+  const explicitLabel = String(food.location_label || food.locationLabel || '').trim();
+  if (explicitLabel) return explicitLabel;
+  const name = String(food.name || '');
+  const tags = Array.isArray(food.tags) ? food.tags.map(String) : [];
+  const distance = Number(food.distance_m);
+  if (/龙湖.*天街|西溪天街/.test(name) || tags.some((tag) => /^天街/.test(tag)) || distance === 613) return '龙湖天街';
+  if (/西溪银泰|银泰城/.test(name) || tags.some((tag) => /^银泰城/.test(tag)) || distance === 383) return '西溪银泰';
+  if (/西溪谷/.test(name) || tags.some((tag) => /^G座内$/.test(tag))) return '西溪谷';
+  return '';
 }
 
 async function rateFood(id, score) {
@@ -397,6 +458,14 @@ async function recordVisit(id) {
     await Promise.all([loadFoods(), loadMembers()]);
     setStatus(els.importStatus, '已记录去过一次，群组到访次数已更新', 'ok');
   } catch (error) { setStatus(els.importStatus, error.message || '记录到访失败，请重试', 'fail'); }
+}
+
+async function undoVisit(id) {
+  try {
+    await api(`/api/foods/${id}/visits`, { method: 'DELETE' });
+    await Promise.all([loadFoods(), loadMembers()]);
+    setStatus(els.importStatus, '已撤销一次到访记录', 'ok');
+  } catch (error) { setStatus(els.importStatus, error.message || '撤销到访失败，请重试', 'fail'); }
 }
 
 function localGroupHistory() {
@@ -424,17 +493,62 @@ async function loadHistory() {
   renderHistory();
 }
 
-function pickOne(id) {
+function updatePickUI() {
+  const hasSelection = Boolean(selectedFoodId);
+  const pickButton = $('pickBtn');
+  const decisionActions = $('decisionActions');
+  const doneButton = $('doneBtn');
+  const chip = $('resultStatusChip');
+  pickButton.hidden = hasSelection;
+  decisionActions.hidden = !hasSelection;
+  chip.hidden = !hasSelection;
+  if (!hasSelection) {
+    pickButton.textContent = isPicking ? '🎲 正在抽选…' : '🎲 随机一家';
+    pickButton.disabled = isPicking;
+    $('decisionHelper').textContent = '';
+    $('decisionHelper').className = 'decision-helper';
+    return;
+  }
+  $('rerollBtn').disabled = isPicking;
+  doneButton.disabled = isPicking || selectedFoodConfirmed;
+  doneButton.textContent = selectedFoodConfirmed ? '✓ 已记录' : '就吃这家';
+  doneButton.classList.remove('loading');
+  doneButton.classList.toggle('confirmed', selectedFoodConfirmed);
+  chip.textContent = selectedFoodConfirmed ? '已记录' : '待确认';
+  chip.classList.toggle('confirmed', selectedFoodConfirmed);
+  $('decisionHelper').textContent = selectedFoodConfirmed ? '已记录到历史，可以换一家继续抽选' : '确认后会记录到历史';
+  $('decisionHelper').className = `decision-helper${selectedFoodConfirmed ? ' ok' : ''}`;
+}
+
+function selectFood(id) {
   if (isPicking) return;
-  if (!foods.length) {
+  const food = foods.find((item) => Number(item.id) === Number(id) && item.enabled !== false);
+  if (!food) return;
+  selectedFoodId = food.id;
+  selectedFoodConfirmed = false;
+  els.dice.classList.remove('rolling');
+  els.result.textContent = `今天去这家：${food.name}`;
+  els.result.classList.add('highlight');
+  els.countTip.textContent = `已手动选择 · ${food.category || '未分类'} · 来自「${currentGroup()?.name || '当前群'}」`;
+  updatePickUI();
+  showView('pick');
+  document.querySelector('.content').scrollTop = 0;
+}
+
+function pickOne() {
+  if (isPicking) return;
+  const pickableFoods = foods.filter((food) => food.enabled !== false);
+  if (!pickableFoods.length) {
     els.result.textContent = '当前群还没有餐厅，请先添加';
     els.result.classList.remove('highlight');
     return;
   }
-  const food = id ? foods.find((item) => item.id === id) : foods[Math.floor(Math.random() * foods.length)];
+  const food = pickableFoods[Math.floor(Math.random() * pickableFoods.length)];
   if (!food) return;
+  selectedFoodId = null;
+  selectedFoodConfirmed = false;
   isPicking = true;
-  document.querySelectorAll('.pick-main,.quick').forEach((button) => { button.disabled = true; });
+  updatePickUI();
   els.groupOpenBtn.disabled = true;
   els.accountBtn.disabled = true;
   els.dice.classList.remove('rolling');
@@ -442,7 +556,7 @@ function pickOne(id) {
   els.dice.classList.add('rolling');
   els.result.classList.remove('highlight');
   els.result.textContent = '正在摇骰子…';
-  els.countTip.textContent = `${foods.length} 个选项随机中`;
+  els.countTip.textContent = `${pickableFoods.length} 家餐厅随机中`;
   let dots = 0;
   const ticker = setInterval(() => {
     dots = (dots + 1) % 4;
@@ -451,44 +565,123 @@ function pickOne(id) {
   setTimeout(async () => {
     clearInterval(ticker);
     els.dice.classList.remove('rolling');
-    els.result.textContent = `今天就吃：${food.name}`;
+    els.result.textContent = `今天去这家：${food.name}`;
     els.result.classList.add('highlight');
     els.countTip.textContent = `${food.category || '未分类'} · 来自「${currentGroup()?.name || '当前群'}」`;
-    try {
-      if (IS_LOCAL) {
-        const next = localGroupHistory();
-        next.unshift({ name: food.name, category: food.category || '未分类', at: new Date().toISOString() });
-        saveLocalHistory(next);
-      } else {
-        await api('/api/history', { method: 'POST', body: JSON.stringify({ foodId: food.id }) });
-      }
-      await loadHistory();
-    } catch (error) {
-      setStatus(els.importStatus, `结果已选出，但历史保存失败：${error.message}`, 'warn');
-    }
+    selectedFoodId = food.id;
     updateStats();
     isPicking = false;
-    document.querySelectorAll('.pick-main,.quick').forEach((button) => { button.disabled = false; });
+    updatePickUI();
     els.groupOpenBtn.disabled = false;
     els.accountBtn.disabled = false;
   }, 2050);
 }
 
+async function confirmSelectedFood() {
+  if (!selectedFoodId || selectedFoodConfirmed) return;
+  const food = foods.find((item) => Number(item.id) === Number(selectedFoodId));
+  if (!food) return;
+  $('doneBtn').disabled = true;
+  $('doneBtn').classList.add('loading');
+  $('doneBtn').textContent = '正在记录…';
+  $('decisionHelper').textContent = '正在写入历史记录';
+  try {
+    if (IS_LOCAL) {
+      await api(`/api/foods/${food.id}/confirm`, { method: 'POST', body: JSON.stringify(memberPayload()) });
+      const next = localGroupHistory();
+      next.unshift({ name: food.name, category: food.category || '未分类', at: new Date().toISOString() });
+      saveLocalHistory(next);
+    } else {
+      await api('/api/history', { method: 'POST', body: JSON.stringify({ foodId: food.id }) });
+    }
+    selectedFoodConfirmed = true;
+    await Promise.all([loadFoods(), loadHistory()]);
+    updatePickUI();
+    setStatus(els.importStatus, `已确定去「${food.name}」`, 'ok');
+  } catch (error) {
+    selectedFoodConfirmed = false;
+    updatePickUI();
+    $('decisionHelper').textContent = error.message || '记录失败，请重试';
+    $('decisionHelper').className = 'decision-helper fail';
+    setStatus(els.importStatus, error.message || '确认失败', 'fail');
+  }
+}
+
+function resetFoodForm() {
+  editingFoodId = null;
+  $('foodFormTitle').textContent = '新增餐厅';
+  $('addBtn').textContent = '保存到当前群';
+  $('nameInput').value = '';
+  $('catInput').value = '';
+  $('locationInput').value = '';
+  $('priceInput').value = '';
+  $('distanceInput').value = '';
+  $('tagsInput').value = '';
+  $('enabledInput').checked = true;
+}
+
+function closeFoodForm() {
+  resetFoodForm();
+  $('addPanel').style.display = 'none';
+}
+
+function runFoodSearch(scrollToResults = false) {
+  if ($('addPanel').style.display !== 'none') closeFoodForm();
+  renderFoods();
+  if (scrollToResults) els.listWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function startEditFood(id) {
+  const food = foods.find((item) => Number(item.id) === Number(id));
+  if (!food) return;
+  editingFoodId = Number(id);
+  $('foodFormTitle').textContent = '编辑餐厅';
+  $('addBtn').textContent = '保存修改';
+  $('nameInput').value = food.name || '';
+  $('catInput').value = food.category || '';
+  $('locationInput').value = food.location_label || restaurantLocationLabel(food) || '';
+  $('priceInput').value = food.avg_price_yuan ?? '';
+  $('distanceInput').value = food.distance_m ?? '';
+  $('tagsInput').value = Array.isArray(food.tags) ? food.tags.join('，') : '';
+  $('enabledInput').checked = food.enabled !== false;
+  $('addPanel').style.display = 'grid';
+  $('addPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  setStatus(els.importStatus, `正在编辑「${food.name}」`, 'warn');
+}
+
 async function addFood() {
   const name = $('nameInput').value.trim();
-  const category = $('catInput').value.trim() || '未分类';
+  const category = $('catInput').value.trim();
+  const locationLabel = $('locationInput').value.trim();
+  const priceText = $('priceInput').value.trim();
+  const distanceText = $('distanceInput').value.trim();
+  const avgPriceYuan = priceText === '' ? null : Number(priceText);
+  const distanceM = distanceText === '' ? null : Number(distanceText);
+  const tags = [...new Set($('tagsInput').value.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean))];
+  const enabled = $('enabledInput').checked;
   if (!name) { setStatus(els.importStatus, '请输入名称', 'warn'); return; }
+  if (!category) { setStatus(els.importStatus, '请输入餐厅类型', 'warn'); return; }
+  if ((avgPriceYuan !== null && !Number.isInteger(avgPriceYuan)) || avgPriceYuan < 0) { setStatus(els.importStatus, '人均价格需要是大于等于 0 的整数', 'warn'); return; }
+  if ((distanceM !== null && !Number.isInteger(distanceM)) || distanceM < 0) { setStatus(els.importStatus, '距离需要是大于等于 0 的整数', 'warn'); return; }
   try {
-    await api('/api/foods', { method: 'POST', body: JSON.stringify({ name, category }) });
-    $('nameInput').value = '';
-    $('catInput').value = '';
-    $('addPanel').style.display = 'none';
+    const editingId = editingFoodId;
+    const path = editingId ? `/api/foods/${editingId}` : '/api/foods';
+    await api(path, { method: editingId ? 'PATCH' : 'POST', body: JSON.stringify({ name, category, location_label: locationLabel || null, avg_price_yuan: avgPriceYuan, distance_m: distanceM, tags, enabled, source: 'manual' }) });
+    closeFoodForm();
     await loadFoods();
-  } catch (error) { setStatus(els.importStatus, error.message || '添加失败', 'fail'); }
+    setStatus(els.importStatus, editingId ? `已保存「${name}」的修改` : `已添加「${name}」`, 'ok');
+  } catch (error) { setStatus(els.importStatus, error.message || (editingFoodId ? '保存失败' : '添加失败'), 'fail'); }
 }
 
 async function deleteFood(id) {
-  try { await api(`/api/foods/${id}`, { method: 'DELETE' }); await loadFoods(); }
+  const food = foods.find((item) => Number(item.id) === Number(id));
+  if (!food || !globalThis.confirm(`确定删除「${food.name}」吗？\n评分和去过记录也会一起删除。`)) return;
+  try {
+    await api(`/api/foods/${id}`, { method: 'DELETE' });
+    if (Number(editingFoodId) === Number(id)) closeFoodForm();
+    await loadFoods();
+    setStatus(els.importStatus, `已删除「${food.name}」`, 'ok');
+  }
   catch (error) { setStatus(els.importStatus, error.message || '删除失败', 'fail'); }
 }
 
@@ -510,12 +703,15 @@ async function importFile() {
   if (!file) { setStatus(els.importStatus, '请先选择文件', 'warn'); return; }
   try {
     const text = await file.text();
-    let next = file.name.toLowerCase().endsWith('.json') ? JSON.parse(text) : parseCSV(text);
-    if (!Array.isArray(next) || !next.length) throw new Error('文件中没有数据');
-    next = next.map((item) => typeof item === 'string' ? { name: item, category: '未分类' } : item).filter((item) => item?.name);
-    await api('/api/foods/import', { method: 'POST', body: JSON.stringify(next) });
+    const parsed = file.name.toLowerCase().endsWith('.json') ? JSON.parse(text) : parseCSV(text);
+    const rawItems = Array.isArray(parsed) ? parsed : parsed?.restaurants;
+    if (!Array.isArray(rawItems) || !rawItems.length) throw new Error('文件中没有餐厅数据');
+    const validItems = rawItems.map((item) => typeof item === 'string' ? { name: item, category: '未分类' } : item).filter((item) => item?.name);
+    if (!confirm(`将用 ${validItems.length} 家餐厅替换「${currentGroup()?.name || '当前群'}」的餐厅库。群和成员会保留，旧餐厅数据将被清除。是否继续？`)) return;
+    const payload = Array.isArray(parsed) ? validItems : { ...parsed, restaurants: validItems };
+    await api('/api/foods/import', { method: 'POST', body: JSON.stringify(payload) });
     await loadFoods();
-    setStatus(els.importStatus, `已导入 ${next.length} 条`, 'ok');
+    setStatus(els.importStatus, `已替换为 ${validItems.length} 家餐厅`, 'ok');
   } catch (error) { setStatus(els.importStatus, error.message || '导入失败，请检查 JSON/CSV 格式', 'fail'); }
 }
 
@@ -533,7 +729,7 @@ async function exportFile() {
 
 function updateStats() {
   els.mealTotal.textContent = foods.length;
-  els.pickTotal.textContent = foods.reduce((sum, food) => sum + (Number(food.visit_count) || 0), 0);
+  els.pickTotal.textContent = foods.reduce((sum, food) => sum + (Number(food.confirmed_count) || 0), 0);
   const rows = foods.filter((food) => Number(food.rating) || Number(food.visit_count)).slice()
     .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0) || (Number(b.visit_count) || 0) - (Number(a.visit_count) || 0)).slice(0, 5);
   els.rankList.innerHTML = rows.length ? rows.map((food) => `<div class="rank"><span>${esc(food.name)}</span><b>⭐ ${Number(food.rating) ? Number(food.rating).toFixed(1) : '暂无'} · ${Number(food.visit_count) || 0} 次</b></div>`).join('') : '<div class="empty" style="padding:12px 0">群里还没有评分或到访记录</div>';
@@ -686,15 +882,23 @@ $('authForm').onsubmit = submitAuth;
 els.loginTab.onclick = () => switchAuth('login');
 els.signupTab.onclick = () => switchAuth('signup');
 $('pickBtn').onclick = () => pickOne();
-$('quickPickBtn').onclick = () => pickOne();
 $('rerollBtn').onclick = () => pickOne();
-$('doneBtn').onclick = () => { if (els.result.classList.contains('highlight')) setStatus(els.importStatus, '已记录到账号历史', 'ok'); };
-$('showAddBtn').onclick = () => { const panel = $('addPanel'); panel.style.display = panel.style.display === 'none' ? 'grid' : 'none'; };
+$('doneBtn').onclick = confirmSelectedFood;
+$('showAddBtn').onclick = () => {
+  const panel = $('addPanel');
+  if (panel.style.display === 'none') {
+    resetFoodForm();
+    panel.style.display = 'grid';
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } else closeFoodForm();
+};
 $('addBtn').onclick = addFood;
+$('cancelFoodBtn').onclick = closeFoodForm;
 $('importBtn').onclick = importFile;
 $('exportBtn').onclick = exportFile;
-els.search.oninput = renderFoods;
-els.category.onchange = renderFoods;
+els.search.oninput = () => runFoodSearch(false);
+$('searchBtn').onclick = () => runFoodSearch(true);
+els.category.onchange = () => runFoodSearch(true);
 els.groupOpenBtn.onclick = () => { els.groupBackdrop.classList.add('open'); renderGroupList(); renderCurrentGroupMenu(); loadMembers(); };
 $('closeGroupBtn').onclick = () => els.groupBackdrop.classList.remove('open');
 els.groupBackdrop.onclick = (event) => { if (event.target === els.groupBackdrop) els.groupBackdrop.classList.remove('open'); };

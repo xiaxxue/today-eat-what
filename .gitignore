@@ -2,6 +2,7 @@ node_modules/
 dist/
 foods.db
 foods.db-*
+foods.db.backup-*
 .dev.vars
 .wrangler/
 .DS_Store
